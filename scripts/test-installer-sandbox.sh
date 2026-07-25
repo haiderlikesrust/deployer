@@ -64,6 +64,26 @@ bash /repo/install/install.sh \
   --ssl-mode letsencrypt-staging \
   --repo /tmp/srcrepo
 
+# A staging certificate must not survive the switch to production: Traefik keys
+# certs by resolver name, so the stale one would keep being served untrusted.
+echo '{"le":{"Certificates":[{"domain":{"main":"deploy.example.com"}}]}}' > /opt/deployer/letsencrypt/acme.json
+echo "════════ switching staging -> production ════════"
+bash /repo/install/install.sh \
+  --base-domain example.com \
+  --email admin@example.com \
+  --ssl-mode letsencrypt \
+  --repo /tmp/srcrepo
+
+if [ -s /opt/deployer/letsencrypt/acme.json ]; then
+  echo "FAIL: stale staging certificate survived the switch to production"; exit 1
+fi
+ls /opt/deployer/letsencrypt/acme.json.*.bak >/dev/null 2>&1 \
+  && echo "ACME_RESET_OK (old certs archived)" \
+  || { echo "FAIL: certificates were not archived"; exit 1; }
+grep -q 'ADMIN_PASSWORD=sandbox-pw' /opt/deployer/.env \
+  && echo "PASSWORD_PRESERVED_OK" \
+  || { echo "FAIL: re-run changed the admin password"; exit 1; }
+
 echo
 echo "════════ generated .env ════════"
 cat /opt/deployer/.env

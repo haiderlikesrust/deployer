@@ -12,12 +12,14 @@
 #   --ssl-mode <mode>        letsencrypt | letsencrypt-staging | none   (default: letsencrypt)
 #   --repo <git-url>         where to clone the deployer from (default: this repo's origin)
 #   --mode <mode>            traefik | behind-nginx   (default: auto-detected from ports)
+#   --reset-certs            discard cached certificates and request fresh ones
+#                            (done automatically when --ssl-mode changes)
 #   --uninstall              stop the stack (keeps /opt/deployer/data)
 set -euo pipefail
 
 INSTALL_DIR=/opt/deployer
 REPO_URL_DEFAULT="https://github.com/haiderlikesrust/deployer.git"
-BASE_DOMAIN="" EMAIL="" ADMIN_PASSWORD="" SSL_MODE="letsencrypt" REPO_URL="" MODE="" UNINSTALL=0
+BASE_DOMAIN="" EMAIL="" ADMIN_PASSWORD="" SSL_MODE="letsencrypt" REPO_URL="" MODE="" UNINSTALL=0 RESET_CERTS=0
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
@@ -35,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --ssl-mode) SSL_MODE="$2"; shift 2 ;;
     --repo) REPO_URL="$2"; shift 2 ;;
     --mode) MODE="$2"; shift 2 ;;
+    --reset-certs) RESET_CERTS=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     *) die "unknown flag: $1" ;;
   esac
@@ -159,11 +162,49 @@ fi
 
 REPO_URL="${REPO_URL:-$REPO_URL_DEFAULT}"
 
+# Warn early if the hostname won't reach this box — Let's Encrypt validates over
+# HTTP to the public DNS record, so a wrong record means no certificate.
+if [[ "$SSL_MODE" == letsencrypt* && "$MODE" == "traefik" ]]; then
+  DNS_IP="$(getent hosts "deploy.$BASE_DOMAIN" 2>/dev/null | awk '{print $1}' | head -n 1 || true)"
+  if [[ -z "$DNS_IP" ]]; then
+    warn "deploy.$BASE_DOMAIN does not resolve yet — certificates will fail until DNS points at $PUBLIC_IP"
+  elif [[ "$DNS_IP" != "$PUBLIC_IP" ]]; then
+    warn "deploy.$BASE_DOMAIN resolves to $DNS_IP, not this machine ($PUBLIC_IP) — certificates will fail unless that is a proxy you control"
+  else
+    log "DNS check: deploy.$BASE_DOMAIN -> $DNS_IP"
+  fi
+fi
+
+PREV_SSL_MODE=""
+if [[ -f "$INSTALL_DIR/.env" ]]; then
+  PREV_SSL_MODE="$(sed -n 's/^SSL_MODE=//p' "$INSTALL_DIR/.env" | head -n 1)"
+fi
+
 log "writing $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"/{data,letsencrypt}
 chmod 700 "$INSTALL_DIR/data"
 touch "$INSTALL_DIR/letsencrypt/acme.json"
 chmod 600 "$INSTALL_DIR/letsencrypt/acme.json"
+
+# Traefik stores certificates under the RESOLVER name, not the CA that issued
+# them. Switching staging <-> production therefore keeps serving the old
+# certificate — a staging one stays untrusted in every browser. Archive it so
+# fresh certificates are requested from the new CA.
+if [[ $RESET_CERTS -eq 1 || ( -n "$PREV_SSL_MODE" && "$PREV_SSL_MODE" != "$SSL_MODE" ) ]]; then
+  if [[ -s "$INSTALL_DIR/letsencrypt/acme.json" ]]; then
+    ACME_BAK="$INSTALL_DIR/letsencrypt/acme.json.${PREV_SSL_MODE:-previous}.$(date +%s).bak"
+    if [[ $RESET_CERTS -eq 1 ]]; then
+      log "resetting cached certificates (--reset-certs)"
+    else
+      log "SSL mode changed ($PREV_SSL_MODE -> $SSL_MODE) — requesting fresh certificates"
+    fi
+    mv "$INSTALL_DIR/letsencrypt/acme.json" "$ACME_BAK"
+    touch "$INSTALL_DIR/letsencrypt/acme.json"
+    chmod 600 "$INSTALL_DIR/letsencrypt/acme.json"
+    log "previous certificates archived at $ACME_BAK"
+    ACME_RESET=1
+  fi
+fi
 
 export GIT_TERMINAL_PROMPT=0  # never block on credentials in a piped install
 if [[ -d "$INSTALL_DIR/src/.git" ]]; then
@@ -266,6 +307,13 @@ docker network inspect deployer >/dev/null 2>&1 </dev/null || docker network cre
 log "building the deployer image (first run takes a few minutes)"
 (cd "$INSTALL_DIR" && docker compose build </dev/null)
 (cd "$INSTALL_DIR" && docker compose up -d </dev/null)
+
+# Compose only recreates traefik when its own config changes, so an acme reset
+# on an unchanged config needs an explicit restart to trigger re-issuance.
+if [[ ${ACME_RESET:-0} -eq 1 ]]; then
+  log "restarting traefik to request certificates"
+  (cd "$INSTALL_DIR" && docker compose restart traefik </dev/null)
+fi
 
 log "waiting for the deployer to come up"
 # The deployer publishes no host port (traefik reaches it over the docker
