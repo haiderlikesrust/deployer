@@ -77,6 +77,14 @@ for p in 80 443; do
   fi
 done
 
+# Re-running over an existing install is normal (upgrades, a previous run that
+# stopped early). Our own traefik holding 80/443 is not a conflict — every
+# published container port shows up as "docker-proxy", so match the container.
+if [[ -n "$PORTS_BUSY" ]] && docker ps --format '{{.Names}}' 2>/dev/null </dev/null | grep -q '^deployer-traefik'; then
+  log "ports 80/443 are held by this deployer's own traefik — re-running over the existing install"
+  PORTS_BUSY=""
+fi
+
 if [[ -z "$MODE" ]]; then
   if [[ -z "$PORTS_BUSY" ]]; then
     MODE=traefik
