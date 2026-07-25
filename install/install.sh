@@ -44,7 +44,7 @@ done
 
 if [[ $UNINSTALL -eq 1 ]]; then
   log "stopping deployer stack (data in $INSTALL_DIR/data is preserved)"
-  (cd "$INSTALL_DIR" && docker compose down) || true
+  (cd "$INSTALL_DIR" && docker compose down </dev/null) || true
   log "done — remove $INSTALL_DIR manually if you want a full wipe"
   exit 0
 fi
@@ -119,6 +119,17 @@ if [[ "$MODE" == "behind-nginx" ]]; then
 fi
 [[ "$SSL_MODE" == "none" && "$MODE" != "behind-nginx" ]] && PUBLIC_SCHEME=http
 
+# Re-running must not invent a new password: the server hashed the first one
+# into its database on first boot and ignores later ADMIN_PASSWORD changes, so
+# a freshly generated one would simply be wrong.
+if [[ -z "$ADMIN_PASSWORD" && -f "$INSTALL_DIR/.env" ]]; then
+  EXISTING_PW="$(sed -n 's/^ADMIN_PASSWORD=//p' "$INSTALL_DIR/.env" | head -n 1)"
+  if [[ -n "$EXISTING_PW" ]]; then
+    ADMIN_PASSWORD="$EXISTING_PW"
+    log "reusing the existing admin password from $INSTALL_DIR/.env"
+  fi
+fi
+
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   # Careful: `tr </dev/urandom | head -c N` looks obvious but is a trap here —
   # head exits early, tr dies of SIGPIPE (141), and `set -o pipefail` turns
@@ -146,12 +157,13 @@ chmod 700 "$INSTALL_DIR/data"
 touch "$INSTALL_DIR/letsencrypt/acme.json"
 chmod 600 "$INSTALL_DIR/letsencrypt/acme.json"
 
+export GIT_TERMINAL_PROMPT=0  # never block on credentials in a piped install
 if [[ -d "$INSTALL_DIR/src/.git" ]]; then
   log "updating existing checkout"
-  git -C "$INSTALL_DIR/src" pull --ff-only
+  git -C "$INSTALL_DIR/src" pull --ff-only </dev/null
 else
   log "cloning $REPO_URL"
-  git clone --depth 1 "$REPO_URL" "$INSTALL_DIR/src"
+  git clone --depth 1 "$REPO_URL" "$INSTALL_DIR/src" </dev/null
 fi
 
 cat > "$INSTALL_DIR/.env" <<EOF
@@ -242,19 +254,35 @@ networks:
 EOF
 
 # ---------- launch ----------
-docker network inspect deployer >/dev/null 2>&1 || docker network create deployer
+docker network inspect deployer >/dev/null 2>&1 </dev/null || docker network create deployer </dev/null
 log "building the deployer image (first run takes a few minutes)"
-(cd "$INSTALL_DIR" && docker compose build)
-(cd "$INSTALL_DIR" && docker compose up -d)
+(cd "$INSTALL_DIR" && docker compose build </dev/null)
+(cd "$INSTALL_DIR" && docker compose up -d </dev/null)
 
 log "waiting for the deployer to come up"
 # The deployer publishes no host port (traefik reaches it over the docker
-# network), so probe it from inside its own container.
+# network), so health comes from the image's own HEALTHCHECK.
+#
+# NOTE: every docker call here redirects stdin from /dev/null. When this script
+# is run as `curl ... | bash`, the SCRIPT ITSELF is on stdin — and any command
+# that attaches stdin (`docker compose exec` notably) swallows the rest of it,
+# ending the install silently with exit 0.
 READY=0
+CID="$(cd "$INSTALL_DIR" && docker compose ps -q deployer 2>/dev/null </dev/null || true)"
 for _ in $(seq 1 45); do
-  if (cd "$INSTALL_DIR" && docker compose exec -T deployer curl -fsS http://localhost:3000/api/health >/dev/null 2>&1); then
-    READY=1
-    break
+  if [[ -z "$CID" ]]; then
+    CID="$(cd "$INSTALL_DIR" && docker compose ps -q deployer 2>/dev/null </dev/null || true)"
+  fi
+  if [[ -n "$CID" ]]; then
+    HS="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}' "$CID" 2>/dev/null </dev/null || echo unknown)"
+    if [[ "$HS" == "healthy" ]]; then
+      READY=1
+      break
+    fi
+    if [[ "$HS" == "nohealthcheck" ]] && docker exec "$CID" curl -fsS http://localhost:3000/api/health >/dev/null 2>&1 </dev/null; then
+      READY=1
+      break
+    fi
   fi
   sleep 2
 done
@@ -292,5 +320,7 @@ if [[ "$SSL_MODE" == "letsencrypt-staging" ]]; then
   echo "  --ssl-mode letsencrypt once everything works."
   echo
 fi
+echo "  password also stored in:  $INSTALL_DIR/.env"
+echo
 echo "  update later:  cd $INSTALL_DIR/src && git pull && cd .. && docker compose build && docker compose up -d"
 echo "─────────────────────────────────────────────────────"

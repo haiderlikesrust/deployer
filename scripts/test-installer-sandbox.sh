@@ -14,6 +14,8 @@ apt-get install -y -qq git curl iproute2 ca-certificates >/dev/null
 # --- stub docker CLI: answers the few things the installer asks ---
 cat > /usr/local/bin/docker <<'STUB'
 #!/usr/bin/env bash
+# Stub that mimics the REAL stdin behaviour of each subcommand, so the piped
+# install is tested honestly: `compose exec` drains stdin like the real thing.
 case "$1 $2" in
   "version --format") echo "27.5.1" ;;
   "compose version") echo "Docker Compose version v2.32.0" ;;
@@ -21,7 +23,10 @@ case "$1 $2" in
   "network create") echo "created" ;;
   "compose build") echo "stub: would build" ;;
   "compose up") echo "stub: would start" ;;
-  "compose exec") exit 0 ;;             # pretend the health probe succeeds
+  "compose ps") echo "stubcid123" ;;
+  "compose down") echo "stub: would stop" ;;
+  "inspect --format") echo "healthy" ;;
+  "compose exec"|"exec ") cat >/dev/null 2>&1; exit 0 ;;   # drains stdin, as the real CLI does
   *) echo "stub docker: $*" ;;
 esac
 STUB
@@ -35,10 +40,11 @@ cd /tmp/srcrepo
 git init -q -b main && git config user.email t@t.local && git config user.name t
 git add -A && git commit -q -m "sandbox fixture"
 
-echo "════════ running installer (generated password, prod SSL) ════════"
-# Deliberately NO --admin-password and NO staging: exercises the password
-# generator and the non-staging branch, i.e. the real first-run path.
-bash /repo/install/install.sh \
+echo "════════ running installer (generated password, prod SSL, PIPED) ════════"
+# Piped through stdin exactly like `curl ... | bash` — this is what catches
+# commands that steal the script off stdin. Deliberately no --admin-password
+# and no staging, so the generator and production-CA branches run too.
+cat /repo/install/install.sh | bash -s -- \
   --base-domain example.com \
   --email admin@example.com \
   --repo /tmp/srcrepo
