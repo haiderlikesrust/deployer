@@ -53,6 +53,7 @@ export interface App {
   startCmd: string | null;
   healthPath: string | null;
   dockerfilePath: string | null;
+  rootDir: string | null;
   memoryLimit: string | null;
   hasGitToken: boolean;
   activeDeploymentId: number | null;
@@ -119,6 +120,7 @@ export interface CreateAppInput {
   type?: string | null;
   port?: number | null;
   domain?: string | null;
+  rootDir?: string | null;
   gitToken?: string | null;
 }
 

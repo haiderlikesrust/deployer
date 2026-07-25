@@ -24,6 +24,7 @@ export default function NewApp() {
   const [type, setType] = useState('');
   const [port, setPort] = useState('');
   const [domain, setDomain] = useState('');
+  const [rootDir, setRootDir] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const create = useMutation({
@@ -41,6 +42,7 @@ export default function NewApp() {
       type: type || undefined,
       port: port ? parseInt(port, 10) : undefined,
       domain: domain.trim() || undefined,
+      rootDir: rootDir.trim() || undefined,
     });
   };
 
@@ -94,6 +96,11 @@ export default function NewApp() {
 
         {showAdvanced && (
           <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-3">
+              <Field label="Root directory" hint="monorepos: build from this subfolder instead of the repo root">
+                <input value={rootDir} onChange={(e) => setRootDir(e.target.value)} placeholder="apps/web" className={inputCls} />
+              </Field>
+            </div>
             <Field label="Type">
               <select value={type} onChange={(e) => setType(e.target.value)} className={inputCls}>
                 <option value="">auto</option>

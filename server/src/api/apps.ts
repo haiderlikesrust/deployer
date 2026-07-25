@@ -50,6 +50,7 @@ const createSchema = z.object({
   type: z.enum(['web', 'worker', 'static']).nullish(),
   port: z.number().int().min(1).max(65535).nullish(),
   domain: z.string().regex(DOMAIN_RE, 'invalid domain').nullish(),
+  rootDir: singleLine(200).nullish(),
   gitToken: singleLine(300).nullish(),
 });
 
@@ -63,6 +64,7 @@ const patchSchema = z.object({
   startCmd: singleLine(500).nullish(),
   healthPath: z.string().max(200).regex(/^\/[^\s]*$/, 'must be a path starting with /').nullish(),
   dockerfilePath: singleLine(200).nullish(),
+  rootDir: singleLine(200).nullish(),
   memoryLimit: z.string().regex(/^\d+[bkmg]?$/i, 'e.g. 512m or 1g').nullish(),
   gitToken: singleLine(300).nullish(),
 });
@@ -119,6 +121,7 @@ export function appView(app: AppRow, extra: Record<string, unknown> = {}) {
     startCmd: app.start_cmd,
     healthPath: app.healthcheck_path,
     dockerfilePath: app.dockerfile_path,
+    rootDir: app.root_dir,
     memoryLimit: app.memory_limit,
     hasGitToken: !!git_token,
     activeDeploymentId: app.active_deployment_id,
@@ -187,6 +190,7 @@ export async function appRoutes(f: FastifyInstance) {
       type: d.type ?? null,
       domain: d.domain?.toLowerCase() ?? null,
       port: d.port ?? null,
+      root_dir: d.rootDir?.trim() || null,
       git_token: d.gitToken?.trim() || null,
     });
     registerSecret(app.git_token);
@@ -225,6 +229,7 @@ export async function appRoutes(f: FastifyInstance) {
     if (d.startCmd !== undefined) patch.start_cmd = d.startCmd || null;
     if (d.healthPath !== undefined) patch.healthcheck_path = d.healthPath || null;
     if (d.dockerfilePath !== undefined) patch.dockerfile_path = d.dockerfilePath || null;
+    if (d.rootDir !== undefined) patch.root_dir = d.rootDir || null;
     if (d.memoryLimit !== undefined) patch.memory_limit = d.memoryLimit || null;
     if (d.gitToken !== undefined) {
       forgetSecret(app.git_token);

@@ -74,7 +74,9 @@ export async function runDeployment(deploymentId: number): Promise<void> {
     // ---- resolving ----
     setStage(dep, (stage = 'resolving'));
     stageLog(dep.id, 'Resolving build configuration');
-    const { cfg, generatedDockerfile, extraContextFiles } = resolveConfig(app, getEnvVars(app.id), srcDir);
+    const buildRoot = resolveRootDir(srcDir, app.root_dir);
+    if (app.root_dir) stageLog(dep.id, `Building from subdirectory '${app.root_dir}'`);
+    const { cfg, generatedDockerfile, extraContextFiles } = resolveConfig(app, getEnvVars(app.id), buildRoot);
     updateDeployment(dep.id, { config_json: JSON.stringify(cfg) });
     for (const note of cfg.notes) appendLog(dep.id, `  ${note}`);
     appendLog(
@@ -94,7 +96,7 @@ export async function runDeployment(deploymentId: number): Promise<void> {
       cfg,
       generatedDockerfile,
       extraContextFiles,
-      contextDir: srcDir,
+      contextDir: buildRoot,
     });
     updateDeployment(dep.id, { image_tag: image });
 
@@ -146,6 +148,24 @@ export async function runDeployment(deploymentId: number): Promise<void> {
 
 function urlFor(cfg: ResolvedConfig): string {
   return `${config.publicScheme}://${cfg.domainHost}`;
+}
+
+/**
+ * Resolve the build root for monorepos, refusing anything that escapes the
+ * clone (a '../' would hand the build context an arbitrary host directory).
+ */
+function resolveRootDir(srcDir: string, rootDir: string | null): string {
+  if (!rootDir || rootDir.trim() === '' || rootDir.trim() === '.') return srcDir;
+  const rel = rootDir.trim().replace(/^[/\\]+/, '');
+  const resolved = path.resolve(srcDir, rel);
+  const within = path.relative(srcDir, resolved);
+  if (within.startsWith('..') || path.isAbsolute(within)) {
+    throw new Error(`root directory '${rootDir}' must stay inside the repository`);
+  }
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    throw new Error(`root directory '${rootDir}' does not exist in the repository`);
+  }
+  return resolved;
 }
 
 /** Swap traffic to the new container, then retire the previous deployment. */

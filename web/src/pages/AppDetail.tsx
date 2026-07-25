@@ -370,6 +370,7 @@ function SettingsTab({ app }: { app: App }) {
     startCmd: app.startCmd ?? '',
     healthPath: app.healthPath ?? '',
     dockerfilePath: app.dockerfilePath ?? '',
+    rootDir: app.rootDir ?? '',
     memoryLimit: app.memoryLimit ?? '',
     gitToken: '',
   });
@@ -391,6 +392,7 @@ function SettingsTab({ app }: { app: App }) {
         startCmd: form.startCmd.trim() || null,
         healthPath: form.healthPath.trim() || null,
         dockerfilePath: form.dockerfilePath.trim() || null,
+        rootDir: form.rootDir.trim() || null,
         memoryLimit: form.memoryLimit.trim() || null,
         ...(form.gitToken.trim() !== '' ? { gitToken: form.gitToken.trim() } : {}),
       }),
@@ -446,6 +448,9 @@ function SettingsTab({ app }: { app: App }) {
         </Field>
         <Field label="Dockerfile path" hint="force a specific Dockerfile">
           <input value={form.dockerfilePath} onChange={set('dockerfilePath')} placeholder="docker/Dockerfile.prod" className={inputCls} />
+        </Field>
+        <Field label="Root directory" hint="monorepos: build from this subfolder">
+          <input value={form.rootDir} onChange={set('rootDir')} placeholder="apps/web" className={inputCls} />
         </Field>
         <Field label="Memory limit" hint="e.g. 512m — empty = unlimited">
           <input value={form.memoryLimit} onChange={set('memoryLimit')} placeholder="512m" className={inputCls} />

@@ -27,6 +27,8 @@ export interface AppRow {
   start_cmd: string | null;
   healthcheck_path: string | null;
   dockerfile_path: string | null;
+  /** Subdirectory of the repo to build from (monorepos). null = repo root. */
+  root_dir: string | null;
   memory_limit: string | null;
   git_token: string | null;
   webhook_secret: string | null;

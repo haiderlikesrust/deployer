@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>deployer — docs</title>
+    <meta name="description" content="Self-hosted mini-PaaS: paste a Git repo URL, get a live HTTPS URL. Documentation and the AI prompt extension." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">☰</button>
+
+    <nav id="sidebar">
+      <div class="brand"><span>🚀</span> deployer</div>
+      <p class="tagline">paste a repo, get a URL</p>
+      <a href="#what">What it is</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="#detection">How builds are detected</a>
+      <a href="#deploy-yml">deploy.yml reference</a>
+      <a href="#precedence">Config precedence</a>
+      <a href="#prompt" class="highlight">★ AI prompt extension</a>
+      <a href="#env">Environment variables</a>
+      <a href="#domains">Domains &amp; HTTPS</a>
+      <a href="#private">Private repos</a>
+      <a href="#monorepo">Monorepos</a>
+      <a href="#types">Workers &amp; static sites</a>
+      <a href="#deploys">Deploys &amp; rollback safety</a>
+      <a href="#ops">Operations</a>
+      <a href="#troubleshooting">Troubleshooting</a>
+      <a href="#security">Security</a>
+    </nav>
+
+    <main>
+      <header class="hero">
+        <h1>deployer</h1>
+        <p class="lead">
+          A one-person PaaS on your own VPS. Paste a Git repo URL into the dashboard and it clones,
+          builds, runs, and serves your app at <code>&lt;name&gt;.yourdomain.com</code> with automatic HTTPS —
+          no per-project server config, ever.
+        </p>
+        <div class="flow">
+          <span>repo URL</span><i>→</i><span>clone</span><i>→</i><span>detect &amp; build</span><i>→</i><span>run</span><i>→</i><span class="live">live + TLS</span>
+        </div>
+      </header>
+
+      <section id="what">
+        <h2>What it is</h2>
+        <p>
+          deployer is a small self-hosted alternative to Heroku/Vercel that runs on a single VPS. It is
+          deliberately built for one developer and their own repositories — not multi-tenant hosting.
+        </p>
+        <div class="cards">
+          <div class="card"><h4>Zero config by default</h4><p>Most repos need nothing. A Dockerfile is used if present; otherwise the stack is detected and a Dockerfile is generated for you.</p></div>
+          <div class="card"><h4>Escape hatches everywhere</h4><p>Override any decision from the dashboard or an optional <code>deploy.yml</code> — without changing how your app is written.</p></div>
+          <div class="card"><h4>Safe deploys</h4><p>A new version must pass a health check before the old container is retired. A failed build never touches what is live.</p></div>
+          <div class="card"><h4>Everything visible</h4><p>Live build logs, runtime logs, deployment history, and the exact resolved config for every deploy.</p></div>
+        </div>
+      </section>
+
+      <section id="quickstart">
+        <h2>Quick start</h2>
+        <h3>1. Install on the VPS</h3>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/haiderlikesrust/deployer/main/install/install.sh \
+  | sudo bash -s -- --base-domain yourdomain.com --email you@yourdomain.com --ssl-mode letsencrypt-staging</code></pre>
+        <p class="note">
+          Start with <code>letsencrypt-staging</code> (expect a browser certificate warning) so Let's Encrypt
+          rate limits can't bite while you shake things out. Re-run with <code>--ssl-mode letsencrypt</code>
+          once a deploy works. Re-running is safe — it reuses your existing password.
+        </p>
+        <h3>2. Point DNS at the box</h3>
+        <table>
+          <thead><tr><th>Type</th><th>Host</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>A</td><td><code>yourdomain.com</code></td><td>your VPS IP</td></tr>
+            <tr><td>A</td><td><code>*.yourdomain.com</code></td><td>your VPS IP</td></tr>
+          </tbody>
+        </table>
+        <p>The wildcard is what makes every future app work without touching DNS again.</p>
+        <h3>3. Deploy something</h3>
+        <p>
+          Open <code>https://deploy.yourdomain.com</code>, sign in with the password the installer printed
+          (also in <code>/opt/deployer/.env</code>), hit <b>New app</b>, paste a repo URL, and watch the build log.
+        </p>
+        <p class="note">No domain yet? Install without <code>--base-domain</code> and you get <code>&lt;your-ip&gt;.sslip.io</code>, which needs no DNS at all.</p>
+      </section>
+
+      <section id="detection">
+        <h2>How builds are detected</h2>
+        <p>Detection runs in this order, and the generated Dockerfile is printed at the top of every build log so nothing is a mystery:</p>
+        <ol class="steps">
+          <li><b>Repo has a <code>Dockerfile</code></b> → it is used as-is. The container port is read from <code>EXPOSE</code> (override if wrong).</li>
+          <li><b><code>package.json</code> with a <code>start</code> script</b> → Node server on <code>node:22-slim</code>. Lockfile decides npm/pnpm/yarn; <code>npm run build</code> runs automatically when a <code>build</code> script exists; dev dependencies are pruned.</li>
+          <li><b><code>package.json</code> with only a build (Vite, CRA, Astro, Eleventy…)</b> → built, then the output directory is served by nginx.</li>
+          <li><b><code>requirements.txt</code> / <code>pyproject.toml</code></b> → Python on <code>python:3.12-slim</code>. A start command is inferred for FastAPI+uvicorn, Flask+gunicorn, and Django+gunicorn.</li>
+          <li><b>Bare <code>index.html</code></b> → served directly by nginx with SPA fallback.</li>
+          <li><b>Anything else</b> → the deploy fails with a clear message. Commit a Dockerfile and any stack works.</li>
+        </ol>
+        <div class="callout">
+          <b>The one rule your app must follow:</b> listen on <code>0.0.0.0</code> and the port in the
+          <code>PORT</code> environment variable. deployer always injects <code>PORT</code>, and routes traffic there.
+          Binding <code>localhost</code> or a hardcoded port is the single most common reason a deploy fails its health check.
+        </div>
+      </section>
+
+      <section id="deploy-yml">
+        <h2><code>deploy.yml</code> reference</h2>
+        <p>Entirely optional, lives in your repo root. Every key is optional; unknown keys are warned about, not fatal.</p>
+        <pre><code>type: web            # web | worker | static
+port: 8080           # port your app listens on inside the container
+build: "npm run build"
+start: "node dist/server.js"
+dockerfile: docker/Dockerfile.prod   # force a specific Dockerfile
+health: /healthz     # readiness path; enables zero-downtime traffic gating
+domain: notes.example.com            # custom domain for this app
+env:
+  NODE_ENV: production               # non-secret defaults (secrets go in the dashboard)</code></pre>
+        <table>
+          <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>type</code></td><td><code>web</code> gets a URL, <code>worker</code> runs with no route, <code>static</code> is built then served by nginx.</td></tr>
+            <tr><td><code>port</code></td><td>Container port. Ignored for static sites (nginx serves on 80 internally).</td></tr>
+            <tr><td><code>build</code> / <code>start</code></td><td>Override the auto-detected commands. Ignored when your repo has its own Dockerfile.</td></tr>
+            <tr><td><code>health</code></td><td>Path polled before traffic switches over. Highly recommended for real apps.</td></tr>
+            <tr><td><code>domain</code></td><td>Serve on your own hostname instead of <code>&lt;name&gt;.&lt;base-domain&gt;</code>.</td></tr>
+            <tr><td><code>env</code></td><td>Non-secret defaults. Dashboard values override these.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="precedence">
+        <h2>Config precedence</h2>
+        <p>Resolved <b>per key</b>, so you can override one thing without restating everything:</p>
+        <div class="precedence">
+          <div><span class="badge ui">dashboard</span><p>Highest. Fix something right now without a commit.</p></div>
+          <i>beats</i>
+          <div><span class="badge yml">deploy.yml</span><p>Committed intent that travels with the repo.</p></div>
+          <i>beats</i>
+          <div><span class="badge auto">auto-detected</span><p>The fallback guess.</p></div>
+        </div>
+        <p>
+          Every deployment stores a snapshot of its fully resolved config, and the deployment view labels each
+          value with where it came from — so “why did it pick port 3000?” always has an answer.
+        </p>
+      </section>
+
+      <section id="prompt">
+        <h2>★ AI prompt extension</h2>
+        <p>
+          Paste this into your coding prompts (Claude Code, Cursor, ChatGPT…) when starting or modifying a project
+          you intend to host here. It teaches the model the small set of conventions that make an app deploy on the
+          first try.
+        </p>
+        <div class="prompt-box">
+          <button class="copy-btn" id="copyPrompt">Copy</button>
+          <pre id="promptText"><code>## Deployment target: deployer (self-hosted mini-PaaS)
+
+This project is deployed by pasting its Git repo URL into a deployer dashboard.
+deployer clones the repo, builds a container image, runs it, and routes traffic
+to it behind Traefik with automatic HTTPS. Write the code so this works with no
+manual server configuration.
+
+Hard requirements:
+1. The server MUST listen on `0.0.0.0` and on the port given by the `PORT`
+   environment variable, defaulting sensibly if unset.
+     Node:   app.listen(process.env.PORT || 3000, '0.0.0.0')
+     Python: uvicorn main:app --host 0.0.0.0 --port $PORT
+   Never bind to localhost/127.0.0.1 — the health check and the proxy will fail.
+2. ALL configuration comes from environment variables. No config files with
+   secrets, no hardcoded hosts, ports, URLs, or credentials. Read them with
+   sensible defaults so the app boots in development unchanged.
+3. Expose a health endpoint `GET /healthz` that returns HTTP 200 as soon as the
+   app is genuinely ready to serve. Keep it cheap and dependency-free.
+4. The app must be stateless on disk. The container filesystem is replaced on
+   every deploy. Persist to an external database or an S3-compatible store —
+   never to local files, and never to in-process memory that matters after a restart.
+5. Handle SIGTERM: stop accepting new work, finish in-flight requests, exit
+   cleanly. Deploys stop the old container with SIGTERM.
+6. Bind-mounted local paths are unavailable. Everything the app needs at runtime
+   must be baked into the image or fetched from a service.
+
+Build conventions (pick ONE and be consistent):
+- Preferred: no Dockerfile. Ship a standard `package.json` with a `start`
+  script (and a `build` script if the project needs compiling), or a standard
+  `requirements.txt`/`pyproject.toml`. deployer generates a clean production
+  Dockerfile automatically. Commit the lockfile.
+- If the stack is unusual, commit a small multi-stage `Dockerfile` that ends
+  with `EXPOSE <port>` and a `CMD` honouring `$PORT`.
+
+Optionally add a `deploy.yml` in the repo root for anything non-obvious:
+    type: web          # web | worker | static
+    port: 8080
+    health: /healthz
+    start: "node dist/server.js"
+    env:
+      NODE_ENV: production
+
+Also produce a `.dockerignore` covering `node_modules`, `.git`, build caches,
+and local env files, and list every environment variable the app reads in the
+README (name, purpose, whether it is required, and a safe default).
+
+Frontend-only projects: a plain static build is fine — build output is served by
+nginx with SPA fallback, so use relative asset paths and never hardcode an API
+origin; read it from an environment variable at build time.</code></pre>
+        </div>
+        <h3>Why each rule exists</h3>
+        <table>
+          <thead><tr><th>Rule</th><th>What breaks without it</th></tr></thead>
+          <tbody>
+            <tr><td>Bind <code>0.0.0.0:$PORT</code></td><td>The health gate never passes; the deploy is rolled back and the old version stays live.</td></tr>
+            <tr><td>Config from env</td><td>You would have to rebuild the image to change a setting, defeating the point.</td></tr>
+            <tr><td><code>/healthz</code></td><td>Traffic can switch to a container that is still starting, causing a visible blip.</td></tr>
+            <tr><td>Stateless disk</td><td>Uploads and SQLite files silently vanish on the next deploy.</td></tr>
+            <tr><td>SIGTERM handling</td><td>In-flight requests are cut off during the swap.</td></tr>
+            <tr><td>Committed lockfile</td><td>Builds stop being reproducible; <code>npm ci</code> fails outright.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="env">
+        <h2>Environment variables</h2>
+        <p>
+          Set them per app under the <b>Environment</b> tab. Values are masked until clicked, and there is a bulk
+          <code>.env</code> paste box for moving a local file across in one go.
+        </p>
+        <ul>
+          <li><code>PORT</code> is always injected by deployer and matches the port traffic is routed to — don't fight it.</li>
+          <li>Dashboard values override <code>env:</code> entries in <code>deploy.yml</code>, key by key.</li>
+          <li>Changes apply on the <b>next deploy</b>; the UI tells you when a redeploy is needed.</li>
+          <li>Keep real secrets in the dashboard, not in <code>deploy.yml</code> — that file is committed to your repo.</li>
+        </ul>
+      </section>
+
+      <section id="domains">
+        <h2>Domains &amp; HTTPS</h2>
+        <p>
+          Every app is reachable at <code>&lt;app-name&gt;.&lt;base-domain&gt;</code> immediately. Set a <b>custom domain</b>
+          in app settings (or <code>domain:</code> in <code>deploy.yml</code>) to serve it somewhere else — point that
+          hostname's DNS at the VPS first, then deploy.
+        </p>
+        <p>
+          Certificates are issued automatically by Let's Encrypt over HTTP-01; HTTP redirects to HTTPS. Certificates
+          persist across restarts, so restarting the stack does not re-issue them.
+        </p>
+        <div class="callout warn">
+          <b>sslip.io mode:</b> handy with no DNS, but sslip.io shares one global Let's Encrypt quota across every user
+          worldwide, so HTTPS there is best-effort and may fall back to a self-signed certificate. Use a real domain
+          for anything you care about.
+        </div>
+      </section>
+
+      <section id="private">
+        <h2>Private repositories</h2>
+        <p>
+          Paste a personal access token (GitHub, GitLab, Gitea — anything over HTTPS) when creating the app, or later
+          in app settings. Read access to the repo is enough.
+        </p>
+        <p>
+          Tokens are handed to git through <code>GIT_ASKPASS</code> — never on a command line and never embedded in a
+          remote URL — and known secret values are scrubbed from build and runtime logs. The API never returns a stored
+          token; the field is write-only.
+        </p>
+      </section>
+
+      <section id="monorepo">
+        <h2>Monorepos</h2>
+        <p>
+          Set <b>Root directory</b> in the app's settings (for example <code>apps/web</code>) and everything —
+          detection, <code>deploy.yml</code> lookup, and the build context — happens inside that subfolder.
+          Deploy the same repo several times with different root directories and names to run the API and the
+          frontend as separate apps.
+        </p>
+      </section>
+
+      <section id="types">
+        <h2>Workers &amp; static sites</h2>
+        <table>
+          <thead><tr><th>Type</th><th>Behaviour</th></tr></thead>
+          <tbody>
+            <tr><td><code>web</code></td><td>Gets a hostname, routed by Traefik, health-checked over HTTP before traffic switches.</td></tr>
+            <tr><td><code>worker</code></td><td>No route and no port. Used for bots, queue consumers, and cron-style loops; considered healthy if the process is still alive shortly after start. Restarted automatically if it exits.</td></tr>
+            <tr><td><code>static</code></td><td>Built (if there is a build step), then served by nginx with SPA fallback so client-side routes work on refresh.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="deploys">
+        <h2>Deploys &amp; rollback safety</h2>
+        <p>Each deployment moves through visible stages:</p>
+        <p class="pipeline"><code>queued</code> → <code>cloning</code> → <code>resolving</code> → <code>building</code> → <code>starting</code> → <code>checking</code> → <code>live</code></p>
+        <ul>
+          <li>Builds run <b>one at a time</b>, so a small VPS is never crushed by two builds at once.</li>
+          <li>The new container starts <b>alongside</b> the old one and must pass its health check before the old one is retired.</li>
+          <li>A failed clone, build, or health check leaves the running version <b>completely untouched</b>.</li>
+          <li>Old images are retained (3 per app by default) so a rollback has something to roll back to.</li>
+          <li>Queue a deploy while one is queued and the older queued one is superseded — the newest commit wins.</li>
+        </ul>
+      </section>
+
+      <section id="ops">
+        <h2>Operations</h2>
+        <h3>Update deployer itself</h3>
+        <pre><code>cd /opt/deployer/src && git pull && cd .. && docker compose build && docker compose up -d</code></pre>
+        <h3>Useful commands</h3>
+        <pre><code># admin password
+grep ADMIN_PASSWORD /opt/deployer/.env
+
+# deployer + proxy logs
+cd /opt/deployer && docker compose logs -f deployer
+cd /opt/deployer && docker compose logs -f traefik
+
+# what is running
+docker ps --filter label=deployer.managed=true
+
+# stop everything (data is preserved)
+cd /opt/deployer && docker compose down</code></pre>
+        <h3>Housekeeping</h3>
+        <p>
+          The <b>System</b> page shows disk, Docker status, and container counts, and offers a prune for dangling
+          images and build cache. Old per-app images are trimmed automatically after each successful deploy, and a
+          deploy refuses to start if free disk is critically low.
+        </p>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <table class="trouble">
+          <thead><tr><th>Symptom</th><th>Cause &amp; fix</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>“app did not answer on port N within 60s”</td>
+              <td>The app isn't listening on <code>0.0.0.0:$PORT</code>, or the port is wrong. Bind <code>0.0.0.0</code> and read <code>PORT</code>; if the port genuinely differs, set it in app settings.</td>
+            </tr>
+            <tr>
+              <td>Build fails on <code>npm ci</code></td>
+              <td>The lockfile isn't committed, or it disagrees with <code>package.json</code>. Commit <code>package-lock.json</code> and keep it in sync.</td>
+            </tr>
+            <tr>
+              <td>Build is killed with no error</td>
+              <td>Out of memory — frontend builds are hungry. Add swap to the VPS, or build a smaller bundle.</td>
+            </tr>
+            <tr>
+              <td>Certificate warning in the browser</td>
+              <td>You installed with <code>--ssl-mode letsencrypt-staging</code>. Re-run the installer with <code>--ssl-mode letsencrypt</code>.</td>
+            </tr>
+            <tr>
+              <td>404 from the proxy</td>
+              <td>DNS for that hostname isn't pointing at the VPS, or the app isn't live. Check the wildcard <code>A</code> record and the app's status.</td>
+            </tr>
+            <tr>
+              <td>“could not detect how to build this repo”</td>
+              <td>No Dockerfile, no <code>package.json</code>, no Python manifest, no <code>index.html</code> at the build root. Commit a Dockerfile, or set the root directory for a monorepo.</td>
+            </tr>
+            <tr>
+              <td>Uploaded files disappear</td>
+              <td>Expected: the container filesystem is replaced each deploy. Use external storage.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="security">
+        <h2>Security</h2>
+        <ul>
+          <li>deployer controls the Docker socket, so <b>the dashboard password is effectively root on the VPS</b>. Use a long one.</li>
+          <li>Only deploy repositories you control — anyone who can push to them can run code on your box.</li>
+          <li>The dashboard sits behind a hashed password with a signed, HttpOnly, SameSite=Strict session cookie, and login is rate-limited.</li>
+          <li>App containers never receive the Docker socket and never publish host ports; traffic reaches them only through Traefik.</li>
+          <li>Environment values and tokens are stored in a root-owned <code>0700</code> directory on the VPS.</li>
+        </ul>
+      </section>
+
+      <footer>
+        <p>
+          Source: <a href="https://github.com/haiderlikesrust/deployer">github.com/haiderlikesrust/deployer</a>
+          · Deployed by deployer itself 🚀
+        </p>
+      </footer>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

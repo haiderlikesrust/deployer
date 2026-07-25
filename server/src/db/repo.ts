@@ -10,6 +10,7 @@ export interface CreateAppInput {
   type: string | null;
   domain: string | null;
   port: number | null;
+  root_dir: string | null;
   git_token: string | null;
 }
 
@@ -17,8 +18,8 @@ export function createApp(input: CreateAppInput): AppRow {
   const ts = now();
   const res = getDb()
     .prepare(
-      `INSERT INTO apps (name, repo_url, branch, type, domain, port, git_token, created_at, updated_at)
-       VALUES (@name, @repo_url, @branch, @type, @domain, @port, @git_token, @ts, @ts)`
+      `INSERT INTO apps (name, repo_url, branch, type, domain, port, root_dir, git_token, created_at, updated_at)
+       VALUES (@name, @repo_url, @branch, @type, @domain, @port, @root_dir, @git_token, @ts, @ts)`
     )
     .run({ ...input, ts });
   return getApp(Number(res.lastInsertRowid))!;
@@ -46,6 +47,7 @@ const APP_PATCH_COLUMNS = [
   'start_cmd',
   'healthcheck_path',
   'dockerfile_path',
+  'root_dir',
   'memory_limit',
   'git_token',
   'webhook_secret',

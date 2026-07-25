@@ -62,4 +62,10 @@ CREATE INDEX idx_deployments_app ON deployments(app_id, id DESC);
 CREATE INDEX idx_env_vars_app ON env_vars(app_id);
 `,
   },
+  {
+    id: 2,
+    name: 'app_root_dir',
+    // Monorepos: build from a subdirectory instead of the repo root.
+    sql: `ALTER TABLE apps ADD COLUMN root_dir TEXT;`,
+  },
 ];
