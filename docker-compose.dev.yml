@@ -1,0 +1,28 @@
+# Local development stack (Windows/macOS with Docker Desktop):
+#   docker network create deployer        (once)
+#   docker compose -f docker-compose.dev.yml up -d
+#   cd server && npm run dev              (server runs on the HOST, talks to Docker Desktop)
+#   cd web && npm run dev                 (Vite dev server, proxies /api -> localhost:3000)
+#
+# Apps become reachable at http://<app-name>.localhost via traefik on :80.
+services:
+  traefik:
+    image: traefik:v3.7
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=deployer
+      - --entrypoints.web.address=:80
+      - --api.dashboard=false
+      - --log.level=INFO
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - deployer
+    restart: unless-stopped
+
+networks:
+  deployer:
+    external: true

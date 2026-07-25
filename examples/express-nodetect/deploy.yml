@@ -1,0 +1,5 @@
+# Optional per-repo config — every key can also live in the dashboard
+# (dashboard settings win over this file; this file wins over auto-detection).
+health: /healthz
+env:
+  MESSAGE: hello-from-deploy-yml

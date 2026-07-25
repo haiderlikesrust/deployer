@@ -1,0 +1,6 @@
+# Shell scripts must stay LF even when authored/checked out on Windows,
+# or they break when executed on the VPS.
+*.sh text eol=lf
+*.yml text
+*.ts text
+*.tsx text

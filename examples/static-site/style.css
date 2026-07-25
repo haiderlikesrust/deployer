@@ -1,0 +1,12 @@
+body {
+  font-family: system-ui, sans-serif;
+  background: #0b0e14;
+  color: #e4e4e7;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  margin: 0;
+}
+h1 {
+  color: #818cf8;
+}
