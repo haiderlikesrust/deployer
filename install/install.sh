@@ -23,6 +23,10 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Never die silently: under `set -euo pipefail` a stray non-zero (a SIGPIPE in a
+# pipeline, an unset variable) would otherwise end the install with no message.
+trap 'rc=$?; printf "\033[1;31merror:\033[0m installer aborted at line %s (exit %s)\n" "$LINENO" "$rc" >&2' ERR
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base-domain) BASE_DOMAIN="$2"; shift 2 ;;
@@ -116,7 +120,16 @@ fi
 [[ "$SSL_MODE" == "none" && "$MODE" != "behind-nginx" ]] && PUBLIC_SCHEME=http
 
 if [[ -z "$ADMIN_PASSWORD" ]]; then
-  ADMIN_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)
+  # Careful: `tr </dev/urandom | head -c N` looks obvious but is a trap here —
+  # head exits early, tr dies of SIGPIPE (141), and `set -o pipefail` turns
+  # that into a silent installer death. Feed a bounded source instead.
+  ADMIN_PASSWORD=$(openssl rand -base64 24 2>/dev/null | LC_ALL=C tr -dc 'A-Za-z0-9' || true)
+  ADMIN_PASSWORD=${ADMIN_PASSWORD:0:20}
+  if [[ -z "$ADMIN_PASSWORD" ]]; then
+    ADMIN_PASSWORD=$(LC_ALL=C head -c 64 /dev/urandom 2>/dev/null | LC_ALL=C tr -dc 'A-Za-z0-9' || true)
+    ADMIN_PASSWORD=${ADMIN_PASSWORD:0:20}
+  fi
+  [[ -n "$ADMIN_PASSWORD" ]] || die "could not generate a password — re-run with --admin-password '<your password>'"
   GENERATED_PW=1
 fi
 

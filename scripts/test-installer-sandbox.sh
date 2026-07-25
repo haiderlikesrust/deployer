@@ -35,7 +35,22 @@ cd /tmp/srcrepo
 git init -q -b main && git config user.email t@t.local && git config user.name t
 git add -A && git commit -q -m "sandbox fixture"
 
-echo "════════ running installer ════════"
+echo "════════ running installer (generated password, prod SSL) ════════"
+# Deliberately NO --admin-password and NO staging: exercises the password
+# generator and the non-staging branch, i.e. the real first-run path.
+bash /repo/install/install.sh \
+  --base-domain example.com \
+  --email admin@example.com \
+  --repo /tmp/srcrepo
+
+grep -q '^ADMIN_PASSWORD=.\{12,\}$' /opt/deployer/.env \
+  && echo "PASSWORD_GENERATED_OK" \
+  || { echo "FAIL: no usable generated password in .env"; exit 1; }
+grep -q 'acme.caserver' /opt/deployer/docker-compose.yml \
+  && { echo "FAIL: staging CA leaked into a prod install"; exit 1; } \
+  || echo "PROD_CA_OK"
+
+echo "════════ re-running installer (explicit password + staging) ════════"
 bash /repo/install/install.sh \
   --base-domain example.com \
   --email admin@example.com \
