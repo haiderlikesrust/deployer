@@ -17,14 +17,15 @@
       <a href="#what">What it is</a>
       <a href="#quickstart">Quick start</a>
       <a href="#detection">How builds are detected</a>
+      <a href="#types">App types: web, worker, static</a>
       <a href="#deploy-yml">deploy.yml reference</a>
       <a href="#precedence">Config precedence</a>
       <a href="#prompt" class="highlight">★ AI prompt extension</a>
       <a href="#env">Environment variables</a>
+      <a href="#env-example">.env.example &amp; needed setup</a>
       <a href="#domains">Domains &amp; HTTPS</a>
       <a href="#private">Private repos</a>
       <a href="#monorepo">Monorepos</a>
-      <a href="#types">Workers &amp; static sites</a>
       <a href="#deploys">Deploys &amp; rollback safety</a>
       <a href="#ops">Operations</a>
       <a href="#troubleshooting">Troubleshooting</a>
@@ -97,10 +98,72 @@
           <li><b>Anything else</b> → the deploy fails with a clear message. Commit a Dockerfile and any stack works.</li>
         </ol>
         <div class="callout">
-          <b>The one rule your app must follow:</b> listen on <code>0.0.0.0</code> and the port in the
+          <b>The one rule every web app must follow:</b> listen on <code>0.0.0.0</code> and the port in the
           <code>PORT</code> environment variable. deployer always injects <code>PORT</code>, and routes traffic there.
           Binding <code>localhost</code> or a hardcoded port is the single most common reason a deploy fails its health check.
+          Workers are exempt — they are never probed over HTTP (see <a href="#types">App types</a>).
         </div>
+      </section>
+
+      <section id="types">
+        <h2>App types: web, worker, static</h2>
+        <p>
+          Not every repo is a website. Detection decides between three types, and the choice changes what deployer
+          does with the container — whether it gets a hostname, and how it is health-checked.
+        </p>
+        <table>
+          <thead><tr><th>Type</th><th>Behaviour</th></tr></thead>
+          <tbody>
+            <tr><td><code>web</code></td><td>Gets a hostname and HTTPS, routed by Traefik. Must listen on <code>0.0.0.0:$PORT</code>, and is polled over HTTP before traffic switches to it.</td></tr>
+            <tr><td><code>worker</code></td><td>Bots, queue consumers, cron-style loops, trading scripts. <b>No domain, no URL, no port routing, no HTTP health check.</b> The only gate is that the process stays alive: if it is still running with zero restarts ten seconds after start, the deploy is accepted. Logs are the primary signal, and the dashboard shows uptime, restart count, exit code, and whether it was OOM-killed.</td></tr>
+            <tr><td><code>static</code></td><td>Built once (if there is a build step), then the output directory is served by nginx with SPA fallback so client-side routes survive a refresh.</td></tr>
+          </tbody>
+        </table>
+
+        <h3>How the type is decided</h3>
+        <p>
+          Static classification is settled first. Everything that is left is a web app <b>only if there is concrete
+          evidence it serves HTTP</b>; otherwise it runs as a worker. The signal that decided it is printed in the
+          build log and shown on the deployment, so the answer to “why is this a worker?” is always on screen.
+        </p>
+        <table>
+          <thead><tr><th>Signal found in the repo</th><th>Resolves to</th></tr></thead>
+          <tbody>
+            <tr><td>A committed <code>Dockerfile</code></td><td><code>web</code> — a hand-written Dockerfile is treated as deliberate intent. Set <code>type: worker</code> yourself if it is a background job.</td></tr>
+            <tr><td>Node dependency on a web framework (<code>express</code>, <code>fastify</code>, <code>koa</code>, <code>hono</code>, <code>next</code>, <code>nuxt</code>, <code>remix</code>, <code>@sveltejs/kit</code>, <code>@nestjs/*</code>, <code>socket.io</code>…)</td><td><code>web</code></td></tr>
+            <tr><td>Start script runs a server framework CLI (<code>next</code>, <code>nuxt</code>, <code>nest</code>, <code>vite</code>, <code>serve</code>…)</td><td><code>web</code></td></tr>
+            <tr><td>Source contains <code>http.createServer()</code>, <code>app.listen()</code>, <code>Bun.serve()</code>, <code>Deno.serve()</code>…</td><td><code>web</code></td></tr>
+            <tr><td>Python dependency in <code>requirements.txt</code> or <code>pyproject.toml</code> on <code>fastapi</code>, <code>flask</code>, <code>django</code>, <code>starlette</code>, <code>uvicorn</code>, <code>gunicorn</code>, <code>aiohttp</code>, <code>tornado</code>…</td><td><code>web</code></td></tr>
+            <tr><td>Python source constructs <code>FastAPI()</code>, <code>Flask()</code>, <code>Quart()</code>, <code>web.Application()</code>…</td><td><code>web</code></td></tr>
+            <tr><td>A frontend build tool (<code>vite</code>, <code>react-scripts</code>, <code>@angular/cli</code>, <code>astro</code>, <code>parcel</code>, <code>@11ty/eleventy</code>) with a <code>build</code> script, or a build script and no server entry point</td><td><code>static</code></td></tr>
+            <tr><td>Bare <code>index.html</code> at the build root</td><td><code>static</code></td></tr>
+            <tr><td><b>None of the above</b> — a <code>package.json</code> or Python project with an entry point (<code>bot.js</code>, <code>worker.py</code>, <code>run.py</code>, <code>index.js</code>…) but no HTTP evidence</td><td><code>worker</code></td></tr>
+          </tbody>
+        </table>
+        <p class="note">
+          Client libraries never count as evidence of a server: <code>socket.io-client</code>, <code>ws</code>,
+          <code>axios</code>, <code>node-fetch</code>, <code>undici</code> and friends are explicitly ignored. A
+          Discord bot that calls an API is a worker, not a web app.
+        </p>
+
+        <h3>Overriding the guess</h3>
+        <p>
+          The type is a normal config key, so the usual precedence applies:
+          <span class="badge ui">dashboard</span> beats <span class="badge yml">deploy.yml</span> beats
+          <span class="badge auto">auto-detected</span>. Pick the type explicitly in the <b>New app</b> form,
+          change it later in app settings, or commit it:
+        </p>
+        <pre><code>type: worker</code></pre>
+        <div class="callout">
+          <b>Workers ignore web-only settings.</b> A health path or custom domain set on a worker is dropped with a
+          note in the build log rather than silently pretending to work. The dashboard shows no URL and no
+          “open site” button for a worker — if you expected one, the type is wrong; set <code>type: web</code>.
+        </div>
+        <p>
+          A worker that exits or crash-loops within the first ten seconds fails the deploy, with the exit code and
+          the tail of its logs — so a bot that dies on a missing API key is caught immediately instead of restarting
+          forever in the background.
+        </p>
       </section>
 
       <section id="deploy-yml">
@@ -118,11 +181,11 @@ env:
         <table>
           <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
           <tbody>
-            <tr><td><code>type</code></td><td><code>web</code> gets a URL, <code>worker</code> runs with no route, <code>static</code> is built then served by nginx.</td></tr>
-            <tr><td><code>port</code></td><td>Container port. Ignored for static sites (nginx serves on 80 internally).</td></tr>
+            <tr><td><code>type</code></td><td><code>web</code> gets a URL, <code>worker</code> runs with no route or URL, <code>static</code> is built then served by nginx. Omit it and deployer decides — see <a href="#types">App types</a>.</td></tr>
+            <tr><td><code>port</code></td><td>Container port. Ignored for static sites (nginx serves on 80 internally) and for workers.</td></tr>
             <tr><td><code>build</code> / <code>start</code></td><td>Override the auto-detected commands. Ignored when your repo has its own Dockerfile.</td></tr>
-            <tr><td><code>health</code></td><td>Path polled before traffic switches over. Highly recommended for real apps.</td></tr>
-            <tr><td><code>domain</code></td><td>Serve on your own hostname instead of <code>&lt;name&gt;.&lt;base-domain&gt;</code>.</td></tr>
+            <tr><td><code>health</code></td><td>Path polled before traffic switches over. Highly recommended for real web apps; ignored for workers.</td></tr>
+            <tr><td><code>domain</code></td><td>Serve on your own hostname instead of <code>&lt;name&gt;.&lt;base-domain&gt;</code>. Ignored for workers.</td></tr>
             <tr><td><code>env</code></td><td>Non-secret defaults. Dashboard values override these.</td></tr>
           </tbody>
         </table>
@@ -149,34 +212,70 @@ env:
         <p>
           Paste this into your coding prompts (Claude Code, Cursor, ChatGPT…) when starting or modifying a project
           you intend to host here. It teaches the model the small set of conventions that make an app deploy on the
-          first try.
+          first try — and it covers background workers as well as web apps, so a bot or queue consumer gets the
+          right rules instead of a pointless HTTP server.
         </p>
         <div class="prompt-box">
           <button class="copy-btn" id="copyPrompt">Copy</button>
           <pre id="promptText"><code>## Deployment target: deployer (self-hosted mini-PaaS)
 
 This project is deployed by pasting its Git repo URL into a deployer dashboard.
-deployer clones the repo, builds a container image, runs it, and routes traffic
-to it behind Traefik with automatic HTTPS. Write the code so this works with no
-manual server configuration.
+deployer clones the repo, builds a container image, and runs it. Web apps are
+routed behind Traefik with automatic HTTPS; workers just run. Write the code so
+this works with no manual server configuration.
 
-Hard requirements:
+FIRST decide which kind of app this is and declare it in `deploy.yml` — do not
+leave it to guesswork:
+    type: web      # serves HTTP: site, API, dashboard
+    type: worker   # bot, queue consumer, scheduler, scraper, trading script
+    type: static   # build output only, served by nginx
+Then follow section (A) or (B), and always follow (C).
+
+--- (A) WEB APPS ---
 1. The server MUST listen on `0.0.0.0` and on the port given by the `PORT`
    environment variable, defaulting sensibly if unset.
      Node:   app.listen(process.env.PORT || 3000, '0.0.0.0')
      Python: uvicorn main:app --host 0.0.0.0 --port $PORT
    Never bind to localhost/127.0.0.1 — the health check and the proxy will fail.
-2. ALL configuration comes from environment variables. No config files with
+2. Expose a health endpoint `GET /healthz` that returns HTTP 200 as soon as the
+   app is genuinely ready to serve. Keep it cheap and dependency-free.
+3. In `deploy.yml`: `type: web`, plus `port:` and `health: /healthz`.
+
+--- (B) BACKGROUND WORKERS ---
+1. Do NOT start an HTTP server, do not open a port, do not write a health
+   endpoint. A worker gets no domain, no URL and no HTTP probe — none of that
+   code would ever be reached.
+2. The worker MUST be the container's foreground process and stay alive: an
+   awaited loop, a blocking consumer, or an in-process scheduler. No
+   daemonising, no `&`, no `nohup`, no external cron. For periodic work use an
+   in-process scheduler instead of exiting after one pass — a process that exits
+   or crash-loops within 10s of starting fails the deploy.
+3. Log to stdout/stderr only, never to log files, and keep output unbuffered
+   (Python: `PYTHONUNBUFFERED=1` or `flush=True`). One line per event: the live
+   log stream is the only window into a worker.
+4. Fail fast and loudly on missing or invalid configuration at startup, with a
+   message naming the variable — do not retry forever.
+5. In `deploy.yml`: `type: worker`. Make sure there is a start command (a
+   `start` script in `package.json`, or `start:` in `deploy.yml`).
+
+--- (C) BOTH ---
+1. ALL configuration comes from environment variables. No config files with
    secrets, no hardcoded hosts, ports, URLs, or credentials. Read them with
    sensible defaults so the app boots in development unchanged.
-3. Expose a health endpoint `GET /healthz` that returns HTTP 200 as soon as the
-   app is genuinely ready to serve. Keep it cheap and dependency-free.
-4. The app must be stateless on disk. The container filesystem is replaced on
-   every deploy. Persist to an external database or an S3-compatible store —
-   never to local files, and never to in-process memory that matters after a restart.
-5. Handle SIGTERM: stop accepting new work, finish in-flight requests, exit
-   cleanly. Deploys stop the old container with SIGTERM.
-6. Bind-mounted local paths are unavailable. Everything the app needs at runtime
+2. Commit a `.env.example` in the repo root documenting EVERY variable the app
+   reads. deployer parses it and holds the deploy behind a form until the
+   required values are set, so keep it accurate:
+     - one short `#` comment line above each key saying what it is;
+     - required keys: leave the value empty or an obvious placeholder;
+     - optional keys: give a real default and write `# optional` above them;
+     - group related keys under `# ---- Section ----` headings;
+     - never put a real secret in it — the file is committed.
+3. Handle SIGTERM: stop accepting new work, finish or checkpoint what is in
+   flight, exit cleanly. Deploys stop the old container with SIGTERM.
+4. Be stateless on disk. The container filesystem is replaced on every deploy.
+   Persist to an external database or an S3-compatible store — never to local
+   files, and never to in-process memory that matters after a restart.
+5. Bind-mounted local paths are unavailable. Everything the app needs at runtime
    must be baked into the image or fetched from a service.
 
 Build conventions (pick ONE and be consistent):
@@ -184,20 +283,13 @@ Build conventions (pick ONE and be consistent):
   script (and a `build` script if the project needs compiling), or a standard
   `requirements.txt`/`pyproject.toml`. deployer generates a clean production
   Dockerfile automatically. Commit the lockfile.
-- If the stack is unusual, commit a small multi-stage `Dockerfile` that ends
-  with `EXPOSE <port>` and a `CMD` honouring `$PORT`.
-
-Optionally add a `deploy.yml` in the repo root for anything non-obvious:
-    type: web          # web | worker | static
-    port: 8080
-    health: /healthz
-    start: "node dist/server.js"
-    env:
-      NODE_ENV: production
+- If the stack is unusual, commit a small multi-stage `Dockerfile` with a `CMD`
+  honouring `$PORT`; web apps also end it with `EXPOSE &lt;port&gt;`. Note that a
+  committed Dockerfile makes deployer assume a web app, so set `type: worker`
+  explicitly when it is a background job.
 
 Also produce a `.dockerignore` covering `node_modules`, `.git`, build caches,
-and local env files, and list every environment variable the app reads in the
-README (name, purpose, whether it is required, and a safe default).
+and local env files (including `.env`, but NOT `.env.example`).
 
 Frontend-only projects: a plain static build is fine — build output is served by
 nginx with SPA fallback, so use relative asset paths and never hardcode an API
@@ -209,9 +301,12 @@ origin; read it from an environment variable at build time.</code></pre>
           <tbody>
             <tr><td>Bind <code>0.0.0.0:$PORT</code></td><td>The health gate never passes; the deploy is rolled back and the old version stays live.</td></tr>
             <tr><td>Config from env</td><td>You would have to rebuild the image to change a setting, defeating the point.</td></tr>
+            <tr><td>Committed <code>.env.example</code></td><td>deployer can't tell you a required value is missing, so the container starts and dies instead of asking.</td></tr>
             <tr><td><code>/healthz</code></td><td>Traffic can switch to a container that is still starting, causing a visible blip.</td></tr>
+            <tr><td>Declared <code>type</code></td><td>Auto-detection is good, but an unusual worker — or any repo with a Dockerfile — can be mistaken for a web app and given a URL it never answers on.</td></tr>
+            <tr><td>Foreground, stdout-logging worker</td><td>A backgrounded process makes the container exit immediately and fail the deploy; file logs are invisible in the dashboard.</td></tr>
             <tr><td>Stateless disk</td><td>Uploads and SQLite files silently vanish on the next deploy.</td></tr>
-            <tr><td>SIGTERM handling</td><td>In-flight requests are cut off during the swap.</td></tr>
+            <tr><td>SIGTERM handling</td><td>In-flight requests or jobs are cut off during the swap.</td></tr>
             <tr><td>Committed lockfile</td><td>Builds stop being reproducible; <code>npm ci</code> fails outright.</td></tr>
           </tbody>
         </table>
@@ -228,7 +323,89 @@ origin; read it from an environment variable at build time.</code></pre>
           <li>Dashboard values override <code>env:</code> entries in <code>deploy.yml</code>, key by key.</li>
           <li>Changes apply on the <b>next deploy</b>; the UI tells you when a redeploy is needed.</li>
           <li>Keep real secrets in the dashboard, not in <code>deploy.yml</code> — that file is committed to your repo.</li>
+          <li>Commit a <a href="#env-example"><code>.env.example</code></a> and the tab becomes a generated form instead of a blank editor.</li>
         </ul>
+      </section>
+
+      <section id="env-example">
+        <h2><code>.env.example</code> &amp; needed setup</h2>
+        <p>
+          If your repo documents its configuration in an example env file, deployer reads it during the
+          <code>resolving</code> stage of every deploy and turns it into a form. You get a checklist of what the app
+          needs instead of a container that starts and immediately dies on a missing key.
+        </p>
+
+        <h3>Which file is read</h3>
+        <p>The first of these found at the build root (after <b>Root directory</b> is applied) wins. There is no recursion:</p>
+        <pre><code>.env.example
+.env.sample
+.env.template
+env.example
+.env.dist</code></pre>
+        <p class="note">Files larger than 256&nbsp;KB are skipped, and at most 200 variables are read.</p>
+
+        <h3>What it understands</h3>
+        <pre><code># ---- Database ----
+# Postgres connection string
+DATABASE_URL=
+
+# API key for Stripe (required)
+STRIPE_KEY=sk_test_xxxx
+
+LOG_LEVEL=info          # optional
+# FEATURE_FLAGS=beta</code></pre>
+        <table>
+          <thead><tr><th>Part of the file</th><th>How it is used</th></tr></thead>
+          <tbody>
+            <tr><td>Comment block directly above a key</td><td>Becomes the field's help text. A blank line between the comment and the key breaks the association.</td></tr>
+            <tr><td>Inline <code># comment</code> after a value</td><td>Also becomes help text for that key.</td></tr>
+            <tr><td>A <code># ---- Heading ----</code> style comment</td><td>Starts a section; fields below it are grouped under that heading in the form.</td></tr>
+            <tr><td>The value itself</td><td>Used as the input's <b>placeholder</b> when it looks like a real default. deployer never fills a value in for you.</td></tr>
+            <tr><td>Key name containing <code>SECRET</code>, <code>TOKEN</code>, <code>KEY</code>, <code>PASSWORD</code>, <code>PRIVATE</code>, <code>AUTH</code>, <code>SALT</code>…</td><td>The field is masked in the dashboard.</td></tr>
+            <tr><td>A commented-out assignment (<code># FEATURE_FLAGS=beta</code>)</td><td>Shown as an available but optional variable.</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Required vs optional</h3>
+        <p>Each key is judged by the first rule that matches:</p>
+        <ol class="steps">
+          <li><code>PORT</code> is <b>always optional</b> — deployer injects it.</li>
+          <li>A commented-out key is <b>optional</b>.</li>
+          <li>The comment says “optional” or “not required” → <b>optional</b>.</li>
+          <li>The comment says “required” or “must be set” → <b>required</b>.</li>
+          <li>The value is empty or a placeholder (<code>changeme</code>, <code>&lt;your-key&gt;</code>, <code>xxxx</code>, <code>TODO</code>, <code>your-api-key</code>, <code>${SOMETHING}</code>…) → <b>required</b>.</li>
+          <li>Anything else — a real-looking default like <code>LOG_LEVEL=info</code> → <b>optional</b>, and that value becomes the placeholder.</li>
+        </ol>
+        <p class="note">
+          The bias is deliberate: a wrongly-required variable costs you one form field, a wrongly-optional one costs
+          you a crashed deploy. Write <code># optional</code> above a key to be explicit.
+        </p>
+
+        <h3>When something is missing</h3>
+        <p>
+          If a required key has no value (an empty string counts as no value), the deployment stops at the
+          <code>resolving</code> stage with the status <b>needs setup</b>. <b>This is not a failure.</b> Nothing was
+          built, nothing was started, and whatever is currently live keeps serving traffic untouched.
+        </p>
+        <div class="callout">
+          The app detail page shows which file was read, which variables are still unset, and each one's description.
+          Two ways forward:
+          <ul>
+            <li><b>Fill them in</b> — the <b>Environment</b> tab renders the schema as a grouped form (required first,
+              optionals collapsed, secrets masked). Save, then deploy.</li>
+            <li><b>Deploy anyway</b> — skips the check for this app from then on. Use it when a variable is genuinely
+              meant to be empty, or the example file is out of date. Toggle it back off in the Environment tab.</li>
+          </ul>
+        </div>
+        <p>
+          The schema is cached on the app after every deploy attempt — including the first one that stopped at
+          <b>needs setup</b> — so the form is available even for an app that has never deployed successfully. Delete
+          the example file from your repo and the checklist disappears on the next deploy.
+        </p>
+        <p class="note">
+          deployer never copies values out of the example file into your app's environment. It is documentation, not
+          a source of defaults — so committing a real secret there still leaks it, exactly as it always did.
+        </p>
       </section>
 
       <section id="domains">
@@ -272,23 +449,12 @@ origin; read it from an environment variable at build time.</code></pre>
         </p>
       </section>
 
-      <section id="types">
-        <h2>Workers &amp; static sites</h2>
-        <table>
-          <thead><tr><th>Type</th><th>Behaviour</th></tr></thead>
-          <tbody>
-            <tr><td><code>web</code></td><td>Gets a hostname, routed by Traefik, health-checked over HTTP before traffic switches.</td></tr>
-            <tr><td><code>worker</code></td><td>No route and no port. Used for bots, queue consumers, and cron-style loops; considered healthy if the process is still alive shortly after start. Restarted automatically if it exits.</td></tr>
-            <tr><td><code>static</code></td><td>Built (if there is a build step), then served by nginx with SPA fallback so client-side routes work on refresh.</td></tr>
-          </tbody>
-        </table>
-      </section>
-
       <section id="deploys">
         <h2>Deploys &amp; rollback safety</h2>
         <p>Each deployment moves through visible stages:</p>
         <p class="pipeline"><code>queued</code> → <code>cloning</code> → <code>resolving</code> → <code>building</code> → <code>starting</code> → <code>checking</code> → <code>live</code></p>
         <ul>
+          <li>A deploy can also end at <code>needs_env</code> during <code>resolving</code> — required variables are missing, so nothing is built. See <a href="#env-example">.env.example</a>.</li>
           <li>Builds run <b>one at a time</b>, so a small VPS is never crushed by two builds at once.</li>
           <li>The new container starts <b>alongside</b> the old one and must pass its health check before the old one is retired.</li>
           <li>A failed clone, build, or health check leaves the running version <b>completely untouched</b>.</li>
@@ -350,6 +516,18 @@ cd /opt/deployer && docker compose down</code></pre>
             <tr>
               <td>“could not detect how to build this repo”</td>
               <td>No Dockerfile, no <code>package.json</code>, no Python manifest, no <code>index.html</code> at the build root. Commit a Dockerfile, or set the root directory for a monorepo.</td>
+            </tr>
+            <tr>
+              <td>App says “needs setup” and nothing built</td>
+              <td>Not a failure — the repo's <code>.env.example</code> lists required variables that are unset. Fill them in on the Environment tab, or use <b>Deploy anyway</b>.</td>
+            </tr>
+            <tr>
+              <td>My web app has no URL and shows a “worker” chip</td>
+              <td>No web framework or HTTP listen call was found, so it was classified as a worker. Set <code>type: web</code> in app settings or <code>deploy.yml</code>. The build log states which signal (or lack of one) decided it.</td>
+            </tr>
+            <tr>
+              <td>“worker is crash-looping (restarted N times…)”</td>
+              <td>The process exited within ten seconds of starting. Read the log tail in the deployment — usually a missing environment variable or an unhandled startup exception.</td>
             </tr>
             <tr>
               <td>Uploaded files disappear</td>

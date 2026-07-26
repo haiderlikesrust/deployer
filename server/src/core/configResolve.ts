@@ -24,6 +24,10 @@ const deployYmlSchema = z.object({
 
 type DeployYml = z.infer<typeof deployYmlSchema>;
 
+const WORKER_REASON =
+  'no web framework detected — running as a worker; no domain and no HTTP health check. ' +
+  'Set type=web in app settings or deploy.yml if this is wrong.';
+
 export interface ResolveOutput {
   cfg: ResolvedConfig;
   /** null when the repo's own Dockerfile is used. */
@@ -67,7 +71,12 @@ function parseDeployYml(repoDir: string, notes: string[]): DeployYml {
  * Merge config with per-key precedence: dashboard setting > deploy.yml > auto-detected.
  * The result (with per-key sources) is snapshotted into the deployment row.
  */
-export function resolveConfig(app: AppRow, envVars: { key: string; value: string }[], repoDir: string): ResolveOutput {
+export function resolveConfig(
+  app: AppRow,
+  envVars: { key: string; value: string }[],
+  repoDir: string,
+  opts: { previousType?: AppType | null } = {}
+): ResolveOutput {
   const notes: string[] = [];
   const sources: Record<string, ConfigSource> = {};
   const yml = parseDeployYml(repoDir, notes);
@@ -97,6 +106,21 @@ export function resolveConfig(app: AppRow, envVars: { key: string; value: string
   if (app.type) sources.type = 'ui';
   else if (yml.type) sources.type = 'yml';
 
+  /**
+   * Guessing "worker" for something already serving traffic would drop its
+   * Traefik route while the deploy still reports success — the site goes dark
+   * silently. Detection may promote to web, never demote away from it.
+   */
+  const keepsWebFromHistory = explicitType == null && opts.previousType === 'web';
+  const autoTypeFrom = (evidence: string | null): { type: AppType; fromHistory: boolean } => {
+    if (evidence) return { type: 'web', fromHistory: false };
+    if (keepsWebFromHistory) return { type: 'web', fromHistory: true };
+    return { type: 'worker', fromHistory: false };
+  };
+  const HISTORY_REASON =
+    'no web framework detected, but this app is already serving as a web app — keeping type=web. ' +
+    'Set type=worker in app settings or deploy.yml if it should be a background job.';
+
   const dockerfileOverride = pick('dockerfile', app.dockerfile_path, yml.dockerfile ?? null, null);
   const dockerfileFound = findDockerfile(repoDir, dockerfileOverride);
 
@@ -107,14 +131,26 @@ export function resolveConfig(app: AppRow, envVars: { key: string; value: string
   let startCmd = pick('start', uiStart, ymlStart, null);
   let generatedDockerfile: string | null = null;
   const extraContextFiles: ResolveOutput['extraContextFiles'] = [];
+  /** The auto-detection story; only used when the type was not set explicitly. */
+  let autoTypeReason = '';
+  let webEvidence: string | null = null;
 
   if (dockerfileFound) {
     builder = 'dockerfile';
+    // A committed Dockerfile is strong intent to serve something — never demote it to a worker.
     type = explicitType ?? 'web';
     if (!sources.type) sources.type = 'auto';
     const sniffed = sniffExpose(repoDir, dockerfileFound.relPath);
     const port = pick('port', app.port, yml.port ?? null, sniffed ?? 3000);
     containerPort = port!;
+    webEvidence = `repo Dockerfile '${dockerfileFound.relPath}'`;
+    autoTypeReason = `repo Dockerfile found — running as a web app on port ${containerPort}`;
+    if (!sniffed && explicitType == null) {
+      notes.push(
+        `no EXPOSE in the Dockerfile — assuming a web app on port ${containerPort}; ` +
+          'set type=worker in app settings or deploy.yml if this is a background job'
+      );
+    }
     if (sources.port === 'auto') {
       notes.push(
         sniffed
@@ -137,6 +173,7 @@ export function resolveConfig(app: AppRow, envVars: { key: string; value: string
           containerPort = 80;
           generatedDockerfile = staticDockerfile();
           extraContextFiles.push({ relPath: '.deployer/nginx.conf', content: NGINX_CONF });
+          autoTypeReason = 'no build script, index.html at the repo root — building once and serving with nginx';
           notes.push('no build script — serving repository files directly with nginx');
         } else {
           throw new Error('type is static but there is no build script and no index.html at the repo root');
@@ -148,13 +185,21 @@ export function resolveConfig(app: AppRow, envVars: { key: string; value: string
         const build = buildCmd ? `RUN ${buildCmd}` : node.buildCmd!;
         generatedDockerfile = nodeStaticDockerfile({ installCmds: node.installCmds, copyFiles: node.copyFiles, buildCmd: build });
         extraContextFiles.push({ relPath: '.deployer/nginx.conf', content: NGINX_CONF });
+        autoTypeReason = 'frontend build script detected — building once and serving with nginx';
         if (app.port || yml.port) notes.push('note: port setting ignored for static sites (nginx serves on 80 internally)');
       } else {
         builder = 'node';
-        type = explicitType === 'worker' ? 'worker' : 'web';
+        const auto = autoTypeFrom(node.webEvidence);
+        type = explicitType ?? auto.type;
         if (!sources.type) sources.type = 'auto';
+        webEvidence = node.webEvidence;
         const port = pick('port', app.port, yml.port ?? null, 3000);
         containerPort = port!;
+        autoTypeReason = node.webEvidence
+          ? `${node.webEvidence} — running as a web app on port ${containerPort}`
+          : auto.fromHistory
+            ? HISTORY_REASON
+            : WORKER_REASON;
         const finalStart = startCmd ?? node.startCmd;
         if (!finalStart) throw new Error('could not determine a start command — set one in app settings or deploy.yml');
         if (!startCmd && node.startCmd) sources.start = 'auto';
@@ -175,10 +220,17 @@ export function resolveConfig(app: AppRow, envVars: { key: string; value: string
       if (py) {
         notes.push(...py.notes);
         builder = 'python';
-        type = explicitType === 'worker' ? 'worker' : explicitType ?? 'web';
+        const auto = autoTypeFrom(py.webEvidence);
+        type = explicitType ?? auto.type;
         if (!sources.type) sources.type = 'auto';
+        webEvidence = py.webEvidence;
         const port = pick('port', app.port, yml.port ?? null, 3000);
         containerPort = port!;
+        autoTypeReason = py.webEvidence
+          ? `${py.webEvidence} — running as a web app on port ${containerPort}`
+          : auto.fromHistory
+            ? HISTORY_REASON
+            : WORKER_REASON;
         const finalStart = startCmd ?? py.startCmd;
         if (!finalStart) {
           throw new Error(
@@ -195,6 +247,7 @@ export function resolveConfig(app: AppRow, envVars: { key: string; value: string
         containerPort = 80;
         generatedDockerfile = staticDockerfile();
         extraContextFiles.push({ relPath: '.deployer/nginx.conf', content: NGINX_CONF });
+        autoTypeReason = 'index.html found at the repo root — building once and serving with nginx';
         notes.push('index.html found at repo root — serving as a static site with nginx');
       } else {
         throw new Error(
@@ -205,10 +258,30 @@ export function resolveConfig(app: AppRow, envVars: { key: string; value: string
     }
   }
 
-  const healthPath = pick('health', app.healthcheck_path, yml.health ?? null, null);
+  const typeReason =
+    sources.type === 'ui'
+      ? `type=${type} (set in app settings)`
+      : sources.type === 'yml'
+        ? `type=${type} (set in deploy.yml)`
+        : autoTypeReason;
+  notes.push(typeReason);
+
+  let healthPath = pick('health', app.healthcheck_path, yml.health ?? null, null);
   const domain = pick('domain', app.domain, yml.domain ?? null, null);
   const domainHost = type === 'worker' ? null : appHost(app.name, domain);
   if (type !== 'worker' && !sources.domain) sources.domain = 'auto';
+
+  if (type === 'worker') {
+    if (healthPath) {
+      notes.push('note: health path ignored for workers (no HTTP route)');
+      healthPath = null;
+      delete sources.health;
+    }
+    if (domain) {
+      notes.push('note: domain ignored for workers (no HTTP route)');
+      delete sources.domain;
+    }
+  }
 
   // env merge: deploy.yml env first, dashboard env overrides, PORT forced last
   const env: Record<string, string> = {};
@@ -231,6 +304,8 @@ export function resolveConfig(app: AppRow, envVars: { key: string; value: string
     dockerfilePath: dockerfileFound?.relPath ?? null,
     sources,
     notes,
+    typeReason,
+    webEvidence,
   };
   return { cfg, generatedDockerfile, extraContextFiles };
 }
@@ -255,6 +330,9 @@ function analyzeNodeSafe(
         startCmd: startOverride,
         pruneCmd: null,
         copyFiles: ['package.json'],
+        // A hand-configured start command stays a web app: demoting it would silently
+        // strip the domain from installs that work today.
+        webEvidence: 'custom start command configured',
         notes: [],
       };
     }

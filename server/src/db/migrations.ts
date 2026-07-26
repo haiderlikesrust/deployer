@@ -68,4 +68,17 @@ CREATE INDEX idx_env_vars_app ON env_vars(app_id);
     // Monorepos: build from a subdirectory instead of the repo root.
     sql: `ALTER TABLE apps ADD COLUMN root_dir TEXT;`,
   },
+  {
+    id: 3,
+    name: 'env_schema_and_skip',
+    // .env.example detection: the latest parsed schema is cached on the app so the
+    // Environment tab can show it before a successful deploy exists.
+    sql: `
+ALTER TABLE apps ADD COLUMN env_schema_json TEXT;
+ALTER TABLE apps ADD COLUMN env_schema_detected_at TEXT;
+ALTER TABLE apps ADD COLUMN skip_env_check INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE deployments ADD COLUMN env_schema_json TEXT;
+ALTER TABLE deployments ADD COLUMN env_missing_json TEXT;
+`,
+  },
 ];

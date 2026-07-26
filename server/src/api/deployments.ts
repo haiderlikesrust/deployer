@@ -19,6 +19,9 @@ function view(d: DeploymentRow) {
     startedAt: d.started_at,
     finishedAt: d.finished_at,
     config: d.config_json ? safeParse(d.config_json) : null,
+    envMissing: d.env_missing_json ? safeParse(d.env_missing_json) : null,
+    // the raw snapshot at that commit — missingKeys/satisfied are live and only meaningful on the app endpoints
+    envSchema: d.env_schema_json ? safeParse(d.env_schema_json) : null,
   };
 }
 

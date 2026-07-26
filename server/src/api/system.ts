@@ -19,6 +19,7 @@ export async function systemRoutes(f: FastifyInstance) {
       runningContainers: containers.filter((c) => c.State === 'running').length,
       baseDomain: config.baseDomain,
       sslMode: config.sslMode,
+      publicScheme: config.publicScheme,
       probeMode: config.probeMode,
     };
   });

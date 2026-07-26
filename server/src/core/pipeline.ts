@@ -6,14 +6,16 @@ import {
   getDeployment,
   getEnvVars,
   setActiveDeployment,
+  setAppEnvSchema,
   updateDeployment,
 } from '../db/repo.js';
 import { now } from '../db/db.js';
-import type { AppRow, DeploymentRow, DeploymentStatus, ResolvedConfig } from '../types.js';
+import type { AppRow, AppType, DeploymentRow, DeploymentStatus, EnvSchema, ResolvedConfig } from '../types.js';
 import { appendLog, closeLog, stageLog } from './buildlogs.js';
 import { clearCancelFlag, isCanceled } from './children.js';
 import { cloneRepo } from './git.js';
 import { resolveConfig } from './configResolve.js';
+import { detectEnvSchema, missingRequiredKeys } from './detect/envexample.js';
 import { buildImage } from './builder.js';
 import { runContainer, healthGate } from './runner.js';
 import { removeContainer, stopContainer, ensureNetwork } from './docker.js';
@@ -23,6 +25,16 @@ import { checkDiskSpace, retainImages } from './cleanup.js';
 class CanceledError extends Error {
   constructor() {
     super('canceled');
+  }
+}
+
+/** Not a failure: the repo declares env vars the user has not filled in yet. */
+class NeedsEnvError extends Error {
+  constructor(
+    readonly missing: string[],
+    readonly schema: EnvSchema
+  ) {
+    super('missing required environment variables');
   }
 }
 
@@ -37,6 +49,9 @@ function setStage(dep: DeploymentRow, status: DeploymentStatus) {
  *   cloning → resolving → building → starting → checking → live
  * Any failure before 'starting' touches nothing at runtime; failures at
  * starting/checking remove the NEW container — the old version keeps serving.
+ * 'resolving' has one extra terminal exit: 'needs_env', taken when the repo's
+ * .env.example declares required variables that are still unset. Nothing is
+ * built and nothing at runtime is touched — it is a prompt, not a failure.
  */
 export async function runDeployment(deploymentId: number): Promise<void> {
   const dep = getDeployment(deploymentId);
@@ -76,7 +91,9 @@ export async function runDeployment(deploymentId: number): Promise<void> {
     stageLog(dep.id, 'Resolving build configuration');
     const buildRoot = resolveRootDir(srcDir, app.root_dir);
     if (app.root_dir) stageLog(dep.id, `Building from subdirectory '${app.root_dir}'`);
-    const { cfg, generatedDockerfile, extraContextFiles } = resolveConfig(app, getEnvVars(app.id), buildRoot);
+    const { cfg, generatedDockerfile, extraContextFiles } = resolveConfig(app, getEnvVars(app.id), buildRoot, {
+      previousType: activeResolvedType(app),
+    });
     updateDeployment(dep.id, { config_json: JSON.stringify(cfg) });
     for (const note of cfg.notes) appendLog(dep.id, `  ${note}`);
     appendLog(
@@ -85,6 +102,39 @@ export async function runDeployment(deploymentId: number): Promise<void> {
         (cfg.domainHost ? ` domain=${cfg.domainHost}` : '') +
         (cfg.healthPath ? ` health=${cfg.healthPath}` : '')
     );
+
+    // ---- env example gate ----
+    // Nothing has been built or started yet, so bailing out here costs nothing.
+    let schema: EnvSchema | null = null;
+    try {
+      schema = detectEnvSchema(buildRoot, (m) => appendLog(dep.id, m));
+      if (schema) schema.commitSha = commit.sha;
+    } catch (e) {
+      appendLog(dep.id, `note: could not read the env example file: ${(e as Error).message}`);
+    }
+    // cached on every attempt, including a null result (the repo may have dropped the file)
+    setAppEnvSchema(app.id, schema);
+    emitEvent({ type: 'app', appId: app.id, status: 'updated' });
+
+    if (schema) {
+      updateDeployment(dep.id, { env_schema_json: JSON.stringify(schema) });
+      const required = schema.vars.filter((v) => v.required);
+      appendLog(dep.id, `  ${schema.file} declares ${schema.vars.length} variable(s), ${required.length} required`);
+      if (schema.vars.some((v) => v.key === 'PORT')) appendLog(dep.id, '  note: PORT is injected by deployer — ignoring it from the example file');
+      const provided = new Set(
+        Object.entries(cfg.env)
+          .filter(([, v]) => v !== '')
+          .map(([k]) => k)
+      );
+      const missing = missingRequiredKeys(schema, provided);
+      if (missing.length && app.skip_env_check !== 1) throw new NeedsEnvError(missing, schema);
+      if (missing.length) {
+        appendLog(
+          dep.id,
+          `note: ${missing.length} required variable(s) still unset (${missing.join(', ')}) — continuing because "deploy anyway" is enabled for this app`
+        );
+      }
+    }
 
     // ---- building ----
     setStage(dep, (stage = 'building'));
@@ -129,7 +179,25 @@ export async function runDeployment(deploymentId: number): Promise<void> {
       await removeContainer(startedContainer).catch(() => {});
       updateDeployment(dep.id, { container_id: null });
     }
-    if (wasCanceled) {
+    if (e instanceof NeedsEnvError) {
+      // no ✗ prefix, no error string — this must not read as a crash
+      stageLog(dep.id, 'Waiting for environment variables');
+      appendLog(dep.id, `This repo's ${e.schema.file} lists ${e.missing.length} required variable(s) that are not set yet:`);
+      for (const k of e.missing) {
+        const spec = e.schema.vars.find((v) => v.key === k);
+        appendLog(dep.id, `  • ${k}${spec?.description ? ` — ${spec.description}` : ''}`);
+      }
+      appendLog(dep.id, 'Nothing was built or changed. Fill these in on the Environment tab and deploy again, or choose "Deploy anyway".');
+      updateDeployment(dep.id, {
+        status: 'needs_env',
+        failed_stage: null,
+        error: null,
+        env_missing_json: JSON.stringify(e.missing),
+        env_schema_json: JSON.stringify(e.schema),
+        finished_at: now(),
+      });
+      emitEvent({ type: 'deployment', appId: app.id, deploymentId: dep.id, status: 'needs_env' });
+    } else if (wasCanceled) {
       stageLog(dep.id, '✗ Deployment canceled');
       updateDeployment(dep.id, { status: 'canceled', failed_stage: stage, finished_at: now() });
       emitEvent({ type: 'deployment', appId: app.id, deploymentId: dep.id, status: 'canceled' });
@@ -148,6 +216,18 @@ export async function runDeployment(deploymentId: number): Promise<void> {
 
 function urlFor(cfg: ResolvedConfig): string {
   return `${config.publicScheme}://${cfg.domainHost}`;
+}
+
+/** What the currently-live deployment resolved to, so detection can't demote it. */
+function activeResolvedType(app: AppRow): AppType | null {
+  if (!app.active_deployment_id) return null;
+  const active = getDeployment(app.active_deployment_id);
+  if (!active?.config_json) return null;
+  try {
+    return (JSON.parse(active.config_json) as Partial<ResolvedConfig>).type ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

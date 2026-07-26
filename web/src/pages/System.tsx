@@ -1,15 +1,32 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Api } from '../api/client';
-import { Button, Field, inputCls, Spinner } from '../components/ui';
+import {
+  Box,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  CopyButton,
+  HardDrive,
+  Input,
+  KeyValue,
+  PageHeader,
+  Server,
+  SkeletonText,
+  StatCard,
+  StatCardSkeleton,
+  Tooltip,
+  formatBytes,
+  useToast,
+} from '../components/ui';
 
-function gb(bytes: number | null): string {
-  if (bytes == null) return '?';
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}
+const LOW_DISK = 2 * 1024 ** 3;
 
 export default function SystemPage() {
   const qc = useQueryClient();
+  const toast = useToast();
   const system = useQuery({ queryKey: ['system'], queryFn: Api.system.get, refetchInterval: 30000 });
   const settings = useQuery({ queryKey: ['settings'], queryFn: Api.settings.get });
   const [retention, setRetention] = useState<string | null>(null);
@@ -18,75 +35,160 @@ export default function SystemPage() {
   const prune = useMutation({
     mutationFn: Api.system.prune,
     onSuccess: (res) => {
-      setPruneOut(res.output || 'nothing to prune');
+      const out = res.output?.trim() ?? '';
+      setPruneOut(out || 'nothing to prune');
       qc.invalidateQueries({ queryKey: ['system'] });
+      toast({ title: out ? 'Prune complete' : 'Nothing to prune', variant: 'success' });
     },
+    onError: (e) => toast({ title: 'Prune failed', description: (e as Error).message, variant: 'error' }),
   });
+
   const saveSettings = useMutation({
     mutationFn: () => Api.settings.put({ imageRetention: parseInt(retention ?? '3', 10) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      setRetention(null);
+      toast({ title: 'Retention saved', variant: 'success' });
+    },
+    onError: (e) => toast({ title: 'Could not save retention', description: (e as Error).message, variant: 'error' }),
   });
 
-  if (system.isLoading || settings.isLoading) return <Spinner />;
   const s = system.data;
   const st = settings.data;
+  const dockerOk = !!s?.docker.ok;
+  const running = s?.runningContainers ?? 0;
+  const managed = s?.managedContainers ?? 0;
 
   return (
-    <div className="max-w-2xl space-y-6">
-      <h1 className="text-xl font-semibold text-zinc-100">System</h1>
+    <div className="max-w-[56rem] space-y-6">
+      <PageHeader
+        title="System"
+        actions={
+          s && <span className="text-xs text-fg-faint">Docker, disk and container state, refreshed every 30s</span>
+        }
+      />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Docker" value={s?.docker.ok ? `v${s.docker.version}` : 'unreachable'} bad={!s?.docker.ok} />
-        <Stat label="Disk free" value={gb(s?.diskFreeBytes ?? null)} bad={(s?.diskFreeBytes ?? Infinity) < 2 * 1024 ** 3} />
-        <Stat label="Apps" value={String(s?.apps ?? 0)} />
-        <Stat label="Containers" value={`${s?.runningContainers ?? 0}/${s?.managedContainers ?? 0} running`} />
-      </div>
+      {system.isPending ? (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <StatCardSkeleton key={i} />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard
+            label="Docker"
+            icon={<Server className="h-3.5 w-3.5" />}
+            tone={dockerOk ? 'default' : 'danger'}
+            value={
+              dockerOk ? (
+                `v${s?.docker.version}`
+              ) : s?.docker.error ? (
+                <Tooltip content={s.docker.error} side="bottom">
+                  <span>Unreachable</span>
+                </Tooltip>
+              ) : (
+                'Unreachable'
+              )
+            }
+          />
+          <StatCard
+            label="Disk free"
+            icon={<HardDrive className="h-3.5 w-3.5" />}
+            value={formatBytes(s?.diskFreeBytes ?? null)}
+            tone={(s?.diskFreeBytes ?? Infinity) < LOW_DISK ? 'danger' : 'default'}
+            hint="Free on the Docker volume"
+          />
+          <StatCard label="Apps" icon={<Box className="h-3.5 w-3.5" />} value={String(s?.apps ?? 0)} />
+          <StatCard label="Containers" value={`${running}/${managed}`}>
+            <div className="mt-2.5 h-[3px] w-full overflow-hidden rounded-full bg-border">
+              <div
+                className="h-full rounded-full bg-success transition-ui"
+                style={{ width: `${managed ? Math.round((running / managed) * 100) : 0}%` }}
+              />
+            </div>
+          </StatCard>
+        </div>
+      )}
 
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-sm">
-        <h2 className="mb-3 font-medium text-zinc-200">Instance</h2>
-        <dl className="grid grid-cols-[140px_1fr] gap-y-2 text-xs">
-          <dt className="text-zinc-500">Base domain</dt>
-          <dd className="font-mono text-zinc-300">{s?.baseDomain}</dd>
-          <dt className="text-zinc-500">Apps served at</dt>
-          <dd className="font-mono text-zinc-300">&lt;app-name&gt;.{s?.baseDomain}</dd>
-          <dt className="text-zinc-500">SSL mode</dt>
-          <dd className="font-mono text-zinc-300">{s?.sslMode}</dd>
-          <dt className="text-zinc-500">Probe mode</dt>
-          <dd className="font-mono text-zinc-300">{s?.probeMode}</dd>
-        </dl>
-        <p className="mt-3 text-xs text-zinc-600">Base domain and SSL mode live in the VPS .env — re-run the installer to change them.</p>
-      </div>
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Instance</CardTitle>
+          </div>
+        </CardHeader>
+        <CardBody>
+          {system.isPending ? (
+            <SkeletonText lines={4} />
+          ) : (
+            <KeyValue
+              rows={[
+                { label: 'Base domain', value: s?.baseDomain ?? '—', copy: s?.baseDomain },
+                { label: 'Apps served at', value: `<app>.${s?.baseDomain ?? ''}` },
+                { label: 'SSL mode', value: s?.sslMode ?? '—' },
+                { label: 'Probe mode', value: s?.probeMode ?? '—' },
+              ]}
+            />
+          )}
+          <p className="mt-3 text-xs text-fg-faint">
+            Base domain and SSL mode live in the VPS .env — re-run the installer to change them.
+          </p>
+        </CardBody>
+      </Card>
 
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
-        <h2 className="mb-3 text-sm font-medium text-zinc-200">Housekeeping</h2>
-        <div className="flex items-end gap-3">
-          <Field label="Images kept per app" hint="older images beyond this are removed after each deploy">
-            <input
+      <Card padding="none">
+        <CardHeader>
+          <div>
+            <CardTitle>Housekeeping</CardTitle>
+          </div>
+        </CardHeader>
+
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border-subtle p-4">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-fg">Image retention</div>
+            <p className="mt-0.5 text-xs text-fg-subtle">
+              Older images beyond this count are removed after each deploy.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              mono
+              aria-label="Images kept per app"
               value={retention ?? String(st?.imageRetention ?? 3)}
               onChange={(e) => setRetention(e.target.value.replace(/\D/g, ''))}
-              className={`${inputCls} w-24`}
+              className="w-20"
             />
-          </Field>
-          <Button onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending || retention == null}>
-            Save
-          </Button>
+            <Button loading={saveSettings.isPending} disabled={retention == null} onClick={() => saveSettings.mutate()}>
+              Save
+            </Button>
+          </div>
         </div>
-        <div className="mt-4 flex items-center gap-3">
-          <Button onClick={() => prune.mutate()} disabled={prune.isPending}>
-            {prune.isPending ? 'Pruning…' : 'Prune dangling images + build cache'}
-          </Button>
-          {pruneOut && <span className="text-xs text-zinc-500">{pruneOut}</span>}
-        </div>
-      </div>
-    </div>
-  );
-}
 
-function Stat({ label, value, bad }: { label: string; value: string; bad?: boolean }) {
-  return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-      <div className="text-xs text-zinc-500">{label}</div>
-      <div className={`mt-1 text-sm font-semibold ${bad ? 'text-red-400' : 'text-zinc-100'}`}>{value}</div>
+        <div className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-fg">Prune images</div>
+              <p className="mt-0.5 text-xs text-fg-subtle">
+                Removes dangling images and the Docker build cache. Running containers are untouched.
+              </p>
+            </div>
+            <Button loading={prune.isPending} onClick={() => prune.mutate()}>
+              Prune dangling images
+            </Button>
+          </div>
+
+          {pruneOut && (
+            <div className="relative mt-3">
+              <pre className="max-h-40 overflow-auto rounded-md border border-border bg-bg-subtle p-3 pr-10 font-mono text-xs whitespace-pre-wrap text-fg-muted scroll-thin">
+                {pruneOut}
+              </pre>
+              <span className="absolute top-1.5 right-1.5">
+                <CopyButton value={pruneOut} title="Copy prune output" />
+              </span>
+            </div>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }

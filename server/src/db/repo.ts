@@ -1,5 +1,5 @@
 import { getDb, now } from './db.js';
-import { IN_FLIGHT_STATUSES, type AppRow, type DeploymentRow, type EnvVarRow } from '../types.js';
+import { IN_FLIGHT_STATUSES, type AppRow, type DeploymentRow, type EnvSchema, type EnvVarRow } from '../types.js';
 
 // ---------- apps ----------
 
@@ -51,6 +51,9 @@ const APP_PATCH_COLUMNS = [
   'memory_limit',
   'git_token',
   'webhook_secret',
+  'skip_env_check',
+  'env_schema_json',
+  'env_schema_detected_at',
 ] as const;
 
 export type AppPatch = Partial<Record<(typeof APP_PATCH_COLUMNS)[number], string | number | null>>;
@@ -64,6 +67,11 @@ export function updateApp(id: number, patch: AppPatch): AppRow | null {
       .run({ ...patch, updated_at: now(), id });
   }
   return getApp(id);
+}
+
+/** Cache the parsed env-example schema so the UI can show it before a successful deploy. */
+export function setAppEnvSchema(appId: number, schema: EnvSchema | null) {
+  updateApp(appId, { env_schema_json: schema ? JSON.stringify(schema) : null, env_schema_detected_at: now() });
 }
 
 export function setActiveDeployment(appId: number, deploymentId: number | null) {
@@ -112,7 +120,22 @@ export function listDeployments(appId: number, limit = 20, beforeId?: number): D
 }
 
 export type DeploymentPatch = Partial<
-  Pick<DeploymentRow, 'status' | 'failed_stage' | 'error' | 'commit_sha' | 'commit_msg' | 'config_json' | 'image_tag' | 'container_id' | 'log_file' | 'started_at' | 'finished_at'>
+  Pick<
+    DeploymentRow,
+    | 'status'
+    | 'failed_stage'
+    | 'error'
+    | 'commit_sha'
+    | 'commit_msg'
+    | 'config_json'
+    | 'image_tag'
+    | 'container_id'
+    | 'log_file'
+    | 'env_schema_json'
+    | 'env_missing_json'
+    | 'started_at'
+    | 'finished_at'
+  >
 >;
 
 export function updateDeployment(id: number, patch: DeploymentPatch) {

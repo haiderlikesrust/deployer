@@ -9,6 +9,9 @@ import type { AppRow, ResolvedConfig } from '../types.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** How long a worker must survive before we call the deployment good. */
+const WORKER_SETTLE_MS = 10_000;
+
 export async function runContainer(app: AppRow, deploymentId: number, cfg: ResolvedConfig, image: string): Promise<string> {
   const name = containerName(app.name, deploymentId);
   await removeContainer(name); // stale leftover from a crashed attempt, if any
@@ -42,12 +45,19 @@ export async function runContainer(app: AppRow, deploymentId: number, cfg: Resol
  */
 export async function healthGate(deploymentId: number, cfg: ResolvedConfig, container: string): Promise<void> {
   if (cfg.type === 'worker') {
-    appendLog(deploymentId, 'Worker app — checking the process stays up for 10s...');
-    await sleep(10_000);
+    appendLog(deploymentId, `Worker app — checking the process stays up for ${WORKER_SETTLE_MS / 1000}s...`);
+    await sleep(WORKER_SETTLE_MS);
     const state = await inspectContainer(container);
     if (!state?.running) {
       throw new Error(`worker exited right after start (status: ${state?.status ?? 'unknown'}, exit code ${state?.exitCode})\n${await logsTail(container)}`);
     }
+    // --restart unless-stopped hides a crash loop behind a "running" container
+    if (state.status === 'restarting' || state.restartCount > 0) {
+      throw new Error(
+        `worker is crash-looping (restarted ${state.restartCount} time(s), last exit code ${state.exitCode})\n${await logsTail(container)}`
+      );
+    }
+    appendLog(deploymentId, `Worker is running (no restarts in the first ${WORKER_SETTLE_MS / 1000}s)`);
     return;
   }
 

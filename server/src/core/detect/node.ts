@@ -10,10 +10,97 @@ export interface NodeAnalysis {
   pruneCmd: string | null;
   /** Exact lockfile COPY sources that exist (COPY with a non-matching glob fails the build). */
   copyFiles: string[];
+  /** Short phrase proving this serves HTTP; null means "run it as a worker". */
+  webEvidence: string | null;
   notes: string[];
 }
 
 const FRONTEND_DEPS = ['vite', 'react-scripts', '@angular/cli', 'astro', 'parcel', '@11ty/eleventy'];
+
+/** next/nuxt/remix/sveltekit are deliberately absent — they are servers, not static builds. */
+export const NODE_WEB_DEPS = [
+  'express',
+  'fastify',
+  'koa',
+  'hapi',
+  '@hapi/hapi',
+  'next',
+  'nuxt',
+  'remix',
+  'hono',
+  '@sveltejs/kit',
+  'socket.io',
+  'h3',
+  'polka',
+  'restify',
+  'micro',
+  'connect',
+  'sails',
+];
+
+export const NODE_WEB_DEP_PREFIXES = [
+  '@nestjs/',
+  '@hono/',
+  'apollo-server',
+  '@apollo/server',
+  '@trpc/server',
+  '@adonisjs/',
+  '@feathersjs/',
+  '@remix-run/',
+];
+
+/** A client library is not a server — these never count as web evidence. */
+export const NODE_WEB_DEP_DENYLIST = [
+  'socket.io-client',
+  'ws',
+  'axios',
+  'node-fetch',
+  'undici',
+  'got',
+  'superagent',
+  'express-rate-limit',
+];
+
+/** Probed (in order) for a start command AND for HTTP-listen evidence. */
+export const SERVER_ENTRY_CANDIDATES = [
+  'server.js',
+  'index.js',
+  'app.js',
+  'main.js',
+  'bot.js',
+  'worker.js',
+  'run.js',
+  'start.js',
+  'cli.js',
+  'src/index.js',
+  'src/main.js',
+  'src/server.js',
+  'src/bot.js',
+  'src/app.js',
+  'dist/index.js',
+  'dist/main.js',
+];
+
+const ENTRY_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts'];
+
+/**
+ * Runners that serve HTTP. Frontend dev/preview servers count too: a repo whose
+ * start script is `react-scripts start` or `docusaurus start` is a site, and
+ * classifying it as a worker would silently leave it with no route at all.
+ */
+const START_SCRIPT_WEB_RE =
+  /\b(next|nuxt|remix|astro|vite|serve|http-server|sirv|nest|react-scripts|docusaurus|gatsby|ng|webpack-dev-server|parcel|expo|vuepress|eleventy|nodemon)\b/;
+
+const LISTEN_PATTERNS: { re: RegExp; api: string }[] = [
+  { re: /\bhttps?2?\.createServer\s*\(/, api: 'http.createServer()' },
+  { re: /\bBun\.serve\s*\(/, api: 'Bun.serve()' },
+  { re: /\bDeno\.serve\s*\(/, api: 'Deno.serve()' },
+  { re: /\b(app|server|httpServer|fastify|api)\.listen\s*\(/, api: '.listen()' },
+  { re: /\.listen\s*\(\s*(?:process\.env\.PORT|PORT|\d{2,5})/, api: '.listen(PORT)' },
+];
+
+const MAX_SCANNED_SOURCES = 8;
+const MAX_SOURCE_BYTES = 256_000;
 
 export function analyzeNode(repoDir: string): NodeAnalysis | null {
   const pkgPath = path.join(repoDir, 'package.json');
@@ -56,34 +143,125 @@ export function analyzeNode(repoDir: string): NodeAnalysis | null {
   }
 
   const buildCmd = scripts.build ? `RUN ${runScript('build')}` : null;
+  const mainEntry = typeof pkg.main === 'string' && pkg.main.trim() !== '' ? pkg.main.trim() : null;
 
-  // Server vs static discrimination
+  // Server vs static discrimination — static is decided before the web/worker split
   if (scripts.start) {
     notes.push(`start script found — treating as a Node server ("${scripts.start}")`);
-    return { kind: 'server', installCmds, buildCmd, startCmd: runScript('start').replace(/^npm run start$/, 'npm start'), pruneCmd, copyFiles, notes };
+    const webEvidence = detectWebEvidence(repoDir, allDeps, scripts.start, mainEntry);
+    return {
+      kind: 'server',
+      installCmds,
+      buildCmd,
+      startCmd: runScript('start').replace(/^npm run start$/, 'npm start'),
+      pruneCmd,
+      copyFiles,
+      webEvidence,
+      notes,
+    };
   }
 
   const frontendDep = FRONTEND_DEPS.find((d) => d in allDeps);
   if (frontendDep && scripts.build) {
     notes.push(`no start script + ${frontendDep} dependency — treating as a static frontend (build then serve with nginx)`);
-    return { kind: 'static', installCmds, buildCmd, startCmd: null, pruneCmd: null, copyFiles, notes };
+    return { kind: 'static', installCmds, buildCmd, startCmd: null, pruneCmd: null, copyFiles, webEvidence: null, notes };
   }
 
-  const entry = ['server.js', 'index.js', 'app.js', 'main.js', pkg.main].filter(Boolean).find((f) => fs.existsSync(path.join(repoDir, f)));
+  const entry = findServerEntry(repoDir, mainEntry);
   if (entry) {
     notes.push(`no start script — falling back to "node ${entry}"`);
-    return { kind: 'server', installCmds, buildCmd, startCmd: `node ${entry}`, pruneCmd, copyFiles, notes };
+    const webEvidence = detectWebEvidence(repoDir, allDeps, `node ${entry}`, entry);
+    return { kind: 'server', installCmds, buildCmd, startCmd: `node ${entry}`, pruneCmd, copyFiles, webEvidence, notes };
   }
 
   if (scripts.build) {
     notes.push('no start script and no server entry, but a build script exists — treating as a static frontend');
-    return { kind: 'static', installCmds, buildCmd, startCmd: null, pruneCmd: null, copyFiles, notes };
+    return { kind: 'static', installCmds, buildCmd, startCmd: null, pruneCmd: null, copyFiles, webEvidence: null, notes };
   }
 
   throw new Error(
     'package.json found, but no start script, no recognizable server entry (server.js/index.js/app.js/main), and no build script. ' +
-      'Add a "start" script (or a start command in the app settings / deploy.yml), or commit a Dockerfile.'
+      'Add a "start" script (or a start command in the app settings / deploy.yml), or commit a Dockerfile, ' +
+      'or set type=worker with a start command if this is a background job.'
   );
+}
+
+/** First existing candidate, so a bare bot/CLI repo resolves a start command instead of throwing. */
+function findServerEntry(repoDir: string, mainEntry: string | null): string | null {
+  for (const base of [mainEntry, ...SERVER_ENTRY_CANDIDATES]) {
+    if (!base) continue;
+    for (const rel of variants(base, ['.js', '.mjs', '.cjs'])) {
+      if (fs.existsSync(path.join(repoDir, rel))) return rel;
+    }
+  }
+  return null;
+}
+
+/**
+ * The signal that this repo actually serves HTTP. Order matters: a declared
+ * dependency is the strongest claim, a source scan the weakest.
+ */
+function detectWebEvidence(
+  repoDir: string,
+  allDeps: Record<string, unknown>,
+  startBody: string | null,
+  mainEntry: string | null
+): string | null {
+  const dep = Object.keys(allDeps).find(
+    (d) => !NODE_WEB_DEP_DENYLIST.includes(d) && (NODE_WEB_DEPS.includes(d) || NODE_WEB_DEP_PREFIXES.some((p) => d.startsWith(p)))
+  );
+  if (dep) return `${dep} dependency`;
+
+  const runner = startBody?.match(START_SCRIPT_WEB_RE);
+  if (runner) return `start script runs ${runner[1]}`;
+
+  return scanForListen(repoDir, mainEntry);
+}
+
+/**
+ * Reading PORT is the contract every app we can route must satisfy, so a repo
+ * that reads it is asking to be served even when its framework is unknown
+ * (hand-rolled servers, bundled output, unusual libraries).
+ */
+const PORT_REFERENCE_RE = /process\.env\.PORT|process\.env\[['"]PORT['"]\]|Bun\.env\.PORT|Deno\.env\.get\(\s*['"]PORT['"]/;
+
+const SOURCE_SCAN_CANDIDATES = ['server.js', 'index.js', 'app.js', 'main.js', 'src/server.js', 'src/index.js', 'src/main.js', 'src/app.js'];
+
+function scanForListen(repoDir: string, mainEntry: string | null): string | null {
+  const seen = new Set<string>();
+  const files: string[] = [];
+  outer: for (const base of [mainEntry, ...SOURCE_SCAN_CANDIDATES]) {
+    if (!base) continue;
+    for (const rel of variants(base, ENTRY_EXTENSIONS)) {
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      if (!fs.existsSync(path.join(repoDir, rel))) continue;
+      files.push(rel);
+      if (files.length >= MAX_SCANNED_SOURCES) break outer;
+    }
+  }
+
+  let portRef: string | null = null;
+  for (const rel of files) {
+    try {
+      const full = path.join(repoDir, rel);
+      if (fs.statSync(full).size > MAX_SOURCE_BYTES) continue;
+      const src = fs.readFileSync(full, 'utf8');
+      const hit = LISTEN_PATTERNS.find((p) => p.re.test(src));
+      if (hit) return `${hit.api} in ${rel}`;
+      if (!portRef && PORT_REFERENCE_RE.test(src)) portRef = `PORT is read in ${rel}`;
+    } catch {
+      // unreadable file — not evidence either way
+    }
+  }
+  return portRef;
+}
+
+function variants(rel: string, extensions: string[]): string[] {
+  const normalized = rel.replace(/^\.\//, '');
+  const m = normalized.match(/^(.*)\.(js|mjs|cjs|ts)$/);
+  if (!m) return [normalized];
+  return extensions.map((e) => `${m[1]}${e}`);
 }
 
 const NODE_BASE = 'node:22-slim';

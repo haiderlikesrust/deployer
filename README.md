@@ -20,25 +20,53 @@ repo URL ──> clone ──> detect/build image ──> run container ──> 
    - `package.json` with only a `build` script / Vite / CRA → static frontend (build → nginx)
    - `requirements.txt` / `pyproject.toml` → Python (uvicorn/gunicorn guessed)
    - bare `index.html` → static site (nginx)
-3. **Overrides, per key, when you need them** — precedence:
+3. **Not everything is a website.** After the static check, an app is only a
+   `web` app if there is real evidence it serves HTTP — a web-framework
+   dependency (`express`, `fastify`, `next`, `@nestjs/*`, `fastapi`, `flask`,
+   `django`…), a start script running a server CLI, or an `app.listen()` /
+   `FastAPI()` in the source. Anything else (bots, queue consumers, cron loops)
+   resolves to `worker`: **no domain, no URL, no HTTP health check** — just logs,
+   uptime and restart tracking. Client libraries (`axios`, `ws`,
+   `socket.io-client`…) never count as evidence. The deciding signal is printed
+   in the build log.
+4. **Overrides, per key, when you need them** — precedence:
    **dashboard settings > `deploy.yml` in the repo > auto-detection.**
 
 `deploy.yml` (optional, all keys optional):
 
 ```yaml
-type: web            # web | worker | static
-port: 8080
+type: web            # web | worker | static — omit to auto-detect
+port: 8080           # ignored for workers and static sites
 build: "npm run build"
 start: "node dist/server.js"
 dockerfile: docker/Dockerfile.prod
-health: /healthz
-domain: notes.example.com
+health: /healthz     # ignored for workers
+domain: notes.example.com   # ignored for workers
 env:
   NODE_ENV: production
 ```
 
 Every deployment snapshots its resolved config — the dashboard shows exactly
-which value came from where.
+which value came from where, including *why* it picked `web` or `worker`.
+
+## `.env.example` → a setup checklist
+
+If the repo has a `.env.example` (or `.env.sample`, `.env.template`,
+`env.example`, `.env.dist`) at the build root, deployer parses it while
+resolving the deploy and turns it into a form:
+
+- comments above a key become help text; `# ---- Section ----` headings group
+  fields; `SECRET`/`TOKEN`/`KEY`/`PASSWORD`-ish names are masked
+- a key is **required** when its value is empty or a placeholder
+  (`changeme`, `<your-key>`, `xxxx`, `TODO`…) or its comment says "required";
+  a real default like `LOG_LEVEL=info` makes it optional (and becomes the
+  input's placeholder). `PORT` is always optional — deployer injects it.
+- if a required value is missing the deployment stops at status `needs_env`
+  **before anything is built** — not a failure, and whatever is live keeps
+  serving. Fill the values in on the Environment tab, or hit **Deploy anyway**
+  to skip the check for that app.
+
+Values are never auto-copied out of the example file; it is documentation only.
 
 ## Install on a VPS
 
@@ -76,8 +104,13 @@ curl -fsSL https://raw.githubusercontent.com/haiderlikesrust/deployer/main/insta
   the old one is removed; failed builds never touch the running version
 - **Private repos** via personal access token (GitHub/GitLab/Gitea) — delivered
   through `GIT_ASKPASS`, scrubbed from all logs
-- **Env var editor** with bulk `.env` paste
-- **Workers** (no HTTP route), **static sites**, custom domains per app
+- **Env var editor** with bulk `.env` paste, plus a schema-driven form generated
+  from the repo's `.env.example` — required variables are collected *before* a
+  build runs (`needs_env`), with a "deploy anyway" escape hatch
+- **Worker-first type detection**: no web framework means it runs as a worker —
+  no domain, no HTTP probe, but real process state (uptime, restart count, exit
+  code, OOM) and a crash-loop gate on deploy
+- **Static sites** and custom domains per app
 - **Housekeeping**: old images pruned (keep-N), orphan cleanup on boot, disk
   guard before builds
 

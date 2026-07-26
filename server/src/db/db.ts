@@ -1,6 +1,5 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
-import path from 'node:path';
 import { config, paths } from '../config.js';
 import { migrations } from './migrations.js';
 

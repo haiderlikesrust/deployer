@@ -28,26 +28,152 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (ct.includes('json') ? res.json() : res.text()) as Promise<T>;
 }
 
+/* ------------------------------------------------------------------ *
+ * Shared unions
+ * ------------------------------------------------------------------ */
+
+export type AppType = 'web' | 'worker' | 'static';
+
+export type AppStatus = 'deploying' | 'live' | 'stopped' | 'failed' | 'needs_env' | 'new';
+
+export type DeploymentStatus =
+  | 'queued'
+  | 'cloning'
+  | 'resolving'
+  | 'building'
+  | 'starting'
+  | 'checking'
+  /** terminal, informational — the repo declares env vars that are not set yet */
+  | 'needs_env'
+  | 'live'
+  | 'superseded'
+  | 'failed'
+  | 'canceled';
+
+export type ConfigSource = 'ui' | 'yml' | 'auto';
+
+/* ------------------------------------------------------------------ *
+ * .env.example schema
+ * ------------------------------------------------------------------ */
+
+export interface EnvVarSpec {
+  key: string;
+  required: boolean;
+  description: string | null;
+  example: string | null;
+  /** name heuristic; a UI masking hint only */
+  secret: boolean;
+  group: string | null;
+  commentedOut: boolean;
+}
+
+/** Raw snapshot as parsed at a commit. Returned on deployment endpoints. */
+export interface EnvSchema {
+  file: string;
+  detectedAt: string;
+  commitSha: string | null;
+  vars: EnvVarSpec[];
+}
+
+/** App endpoints add the live comparison against the app's current env vars. */
+export interface EnvSchemaFull extends EnvSchema {
+  missingKeys: string[];
+  satisfied: boolean;
+}
+
+/** Compact form for list rows and headers. */
+export interface EnvStatus {
+  file: string;
+  requiredCount: number;
+  missingCount: number;
+  satisfied: boolean;
+}
+
+/* ------------------------------------------------------------------ *
+ * Containers and deployments
+ * ------------------------------------------------------------------ */
+
+export interface ContainerInfo {
+  running: boolean;
+  /** docker State.Status: created | running | restarting | paused | exited | dead */
+  status: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  exitCode: number | null;
+  restartCount: number;
+  oomKilled: boolean;
+  health: 'healthy' | 'unhealthy' | 'starting' | null;
+  uptimeSeconds: number | null;
+}
+
 export interface DeploymentSummary {
   id: number;
-  status: string;
+  status: DeploymentStatus;
   failedStage: string | null;
   error: string | null;
   commitSha: string | null;
   commitMsg: string | null;
   createdAt: string;
   finishedAt: string | null;
+  envMissingCount: number | null;
 }
+
+export interface ResolvedConfig {
+  type: AppType;
+  domainHost: string | null;
+  containerPort: number;
+  buildCmd: string | null;
+  startCmd: string | null;
+  /** always null when type === 'worker' */
+  healthPath: string | null;
+  env: Record<string, string>;
+  builder: 'dockerfile' | 'node' | 'node-static' | 'python' | 'static' | string;
+  dockerfilePath: string | null;
+  sources: Record<string, ConfigSource>;
+  notes: string[];
+  /** absent on deployments created before worker-first detection landed */
+  typeReason?: string;
+  webEvidence?: string | null;
+}
+
+export interface Deployment {
+  id: number;
+  appId: number;
+  status: DeploymentStatus;
+  /** stays null for needs_env — it is not a failure */
+  failedStage: string | null;
+  error: string | null;
+  trigger: 'manual' | 'webhook' | 'initial' | string;
+  commitSha: string | null;
+  commitMsg: string | null;
+  imageTag: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  config: ResolvedConfig | null;
+  /** non-null only on needs_env deployments */
+  envMissing: string[] | null;
+  envSchema: EnvSchema | null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Apps
+ * ------------------------------------------------------------------ */
 
 export interface App {
   id: number;
   name: string;
   repoUrl: string;
   branch: string;
-  type: string | null;
+  /** the explicit dashboard override only — null means "auto-detect" */
+  type: AppType | null;
+  /** override, else the last resolved type, else null (never resolved) */
+  effectiveType: AppType | null;
+  isWorker: boolean;
   domain: string | null;
-  effectiveHost: string;
-  url: string;
+  /** null when isWorker — workers get no HTTP route */
+  effectiveHost: string | null;
+  url: string | null;
   port: number | null;
   buildCmd: string | null;
   startCmd: string | null;
@@ -57,42 +183,38 @@ export interface App {
   memoryLimit: string | null;
   hasGitToken: boolean;
   activeDeploymentId: number | null;
-  status: 'deploying' | 'live' | 'stopped' | 'failed' | 'new';
-  lastDeployment?: DeploymentSummary | null;
+  skipEnvCheck: boolean;
+  /** null when no example file was found (or the app never resolved) */
+  envStatus: EnvStatus | null;
+  createdAt: string;
+  updatedAt: string;
+  status: AppStatus;
+  lastDeployment: DeploymentSummary | null;
+  /** detail endpoint only */
   activeDeployment?: DeploymentSummary | null;
-  container?: { running: boolean; status: string; startedAt: string | null } | null;
-  createdAt: string;
+  /** detail endpoint only; null when there is no active container */
+  container?: ContainerInfo | null;
+  /** detail endpoint only */
+  envSchema?: EnvSchemaFull | null;
 }
 
-export interface Deployment {
-  id: number;
-  appId: number;
-  status: string;
-  failedStage: string | null;
-  error: string | null;
-  trigger: string;
-  commitSha: string | null;
-  commitMsg: string | null;
-  imageTag: string | null;
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  config: ResolvedConfig | null;
+export interface EnvSchemaResponse {
+  schema: EnvSchemaFull | null;
+  skipEnvCheck: boolean;
+  /** null = the app has never been resolved */
+  detectedAt: string | null;
 }
 
-export interface ResolvedConfig {
-  type: string;
-  domainHost: string | null;
-  containerPort: number;
-  buildCmd: string | null;
-  startCmd: string | null;
-  healthPath: string | null;
-  env: Record<string, string>;
-  builder: string;
-  dockerfilePath: string | null;
-  sources: Record<string, 'ui' | 'yml' | 'auto'>;
-  notes: string[];
+export interface EnvPutResult {
+  ok: true;
+  redeployRequired: boolean;
+  missingKeys: string[];
+  envSatisfied: boolean;
 }
+
+/* ------------------------------------------------------------------ *
+ * System / settings
+ * ------------------------------------------------------------------ */
 
 export interface SystemInfo {
   docker: { version: string; ok: boolean; error?: string };
@@ -102,6 +224,7 @@ export interface SystemInfo {
   runningContainers: number;
   baseDomain: string;
   sslMode: string;
+  publicScheme?: string;
   probeMode: string;
 }
 
@@ -117,11 +240,20 @@ export interface CreateAppInput {
   repoUrl: string;
   name?: string;
   branch?: string;
-  type?: string | null;
+  type?: AppType | string | null;
   port?: number | null;
   domain?: string | null;
   rootDir?: string | null;
   gitToken?: string | null;
+}
+
+/** `event: update` payload on /api/events. */
+export interface SseUpdate {
+  type: 'deployment' | 'app';
+  appId: number;
+  deploymentId?: number;
+  status: string;
+  ts: number;
 }
 
 export const Api = {
@@ -135,7 +267,10 @@ export const Api = {
     create: (input: CreateAppInput) => req<{ app: App; deploymentId: number }>('/apps', { method: 'POST', body: JSON.stringify(input) }),
     patch: (id: number, patch: Record<string, unknown>) => req<App & { redeployRequired?: boolean }>(`/apps/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     remove: (id: number) => req<void>(`/apps/${id}`, { method: 'DELETE' }),
-    deploy: (id: number) => req<{ deploymentId: number }>(`/apps/${id}/deploy`, { method: 'POST' }),
+    /** `skipEnvCheck: true` persists the "deploy anyway" flag before enqueueing. */
+    deploy: (id: number, opts?: { skipEnvCheck?: boolean }) =>
+      req<{ deploymentId: number }>(`/apps/${id}/deploy`, { method: 'POST', body: JSON.stringify(opts ?? {}) }),
+    envSchema: (id: number) => req<EnvSchemaResponse>(`/apps/${id}/env-schema`),
     action: (id: number, action: 'start' | 'stop' | 'restart') => req<{ ok: boolean }>(`/apps/${id}/${action}`, { method: 'POST' }),
   },
 
@@ -149,7 +284,7 @@ export const Api = {
   env: {
     get: (appId: number) => req<{ key: string; value: string }[]>(`/apps/${appId}/env`),
     put: (appId: number, vars: { key: string; value: string }[]) =>
-      req<{ ok: boolean; redeployRequired: boolean }>(`/apps/${appId}/env`, { method: 'PUT', body: JSON.stringify({ vars }) }),
+      req<EnvPutResult>(`/apps/${appId}/env`, { method: 'PUT', body: JSON.stringify({ vars }) }),
   },
 
   settings: {

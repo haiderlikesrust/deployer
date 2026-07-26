@@ -48,8 +48,19 @@ export interface ContainerState {
   running: boolean;
   status: string;
   startedAt: string | null;
+  finishedAt: string | null;
   exitCode: number | null;
+  restartCount: number;
+  oomKilled: boolean;
+  error: string | null;
+  health: 'healthy' | 'unhealthy' | 'starting' | null;
   ip: string | null;
+}
+
+/** Docker reports the zero time for "never started"/"never exited" — that is not a timestamp. */
+function zeroTimeToNull(t: unknown): string | null {
+  if (typeof t !== 'string' || t === '' || t.startsWith('0001-01-01')) return null;
+  return t;
 }
 
 export async function inspectContainer(nameOrId: string): Promise<ContainerState | null> {
@@ -61,8 +72,13 @@ export async function inspectContainer(nameOrId: string): Promise<ContainerState
     return {
       running: !!info?.State?.Running,
       status: info?.State?.Status ?? 'unknown',
-      startedAt: info?.State?.StartedAt ?? null,
+      startedAt: zeroTimeToNull(info?.State?.StartedAt),
+      finishedAt: zeroTimeToNull(info?.State?.FinishedAt),
       exitCode: info?.State?.ExitCode ?? null,
+      restartCount: info?.RestartCount ?? 0,
+      oomKilled: !!info?.State?.OOMKilled,
+      error: info?.State?.Error || null,
+      health: info?.State?.Health?.Status ?? null,
       ip: net?.IPAddress ?? null,
     };
   } catch {

@@ -1,30 +1,244 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  /* ---------- fonts ---------- */
+  /* "Inter" was named here but never loaded (no @font-face, no <link>), so every screen
+     silently rendered in the system UI font. Own that instead: system-first, zero requests. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    Inter, Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Cascadia Code", "JetBrains Mono",
+    "Roboto Mono", Menlo, Consolas, monospace;
+
+  /* ---------- surfaces (page < card < raised < popover) ---------- */
+  --color-bg:         #08080a;
+  --color-bg-subtle:  #0c0c0e;
+  --color-surface:    #101013;
+  --color-surface-2:  #16161a;
+  --color-surface-3:  #1c1c21;
+  --color-overlay:    rgb(0 0 0 / 0.66);
+
+  /* ---------- borders: hairline, low contrast ---------- */
+  --color-border:        #1e1e23;
+  --color-border-subtle: #17171b;
+  --color-border-strong: #2c2c33;
+  --color-border-focus:  #3d6fd6;
+
+  /* ---------- text tiers ---------- */
+  --color-fg:        #ededef;
+  --color-fg-muted:  #a5a5ad;
+  --color-fg-subtle: #7c7c85;
+  --color-fg-faint:  #52525b;
+
+  /* ---------- accent: links, focus, selection only ---------- */
+  --color-accent:     #3d6fd6;
+  --color-accent-fg:  #7fa9ff;
+  --color-accent-bg:  rgb(61 111 214 / 0.12);
+
+  /* ---------- status language: one loud color per screen, max ---------- */
+  --color-success:     #34d399;
+  --color-success-fg:  #6ee7b7;
+  --color-success-bg:  rgb(52 211 153 / 0.10);
+  --color-success-br:  rgb(52 211 153 / 0.22);
+
+  --color-warn:        #f5a524;
+  --color-warn-fg:     #fbc76b;
+  --color-warn-bg:     rgb(245 165 36 / 0.10);
+  --color-warn-br:     rgb(245 165 36 / 0.22);
+
+  --color-danger:      #e5484d;
+  --color-danger-fg:   #ff9a9e;
+  --color-danger-bg:   rgb(229 72 77 / 0.10);
+  --color-danger-br:   rgb(229 72 77 / 0.24);
+
+  --color-info:        #38bdf8;
+  --color-info-fg:     #7dd3fc;
+  --color-info-bg:     rgb(56 189 248 / 0.10);
+  --color-info-br:     rgb(56 189 248 / 0.22);
+
+  --color-neutral-fg:  #a5a5ad;
+  --color-neutral-bg:  rgb(255 255 255 / 0.05);
+  --color-neutral-br:  rgb(255 255 255 / 0.10);
+
+  /* ---------- ANSI palette for LogViewer ---------- */
+  --color-ansi-black:   #4b4b53;
+  --color-ansi-red:     #ff6b70;
+  --color-ansi-green:   #4ade80;
+  --color-ansi-yellow:  #fbc76b;
+  --color-ansi-blue:    #7fa9ff;
+  --color-ansi-magenta: #d8a0ff;
+  --color-ansi-cyan:    #67e8f9;
+  --color-ansi-white:   #d4d4d8;
+  --color-ansi-dim:     #6f6f78;
+
+  /* ---------- radii ---------- */
+  --radius-xs:  4px;
+  --radius-sm:  6px;
+  --radius-md:  8px;
+  --radius-lg:  10px;
+  --radius-xl:  14px;
+
+  /* ---------- shadows: depth from the 1px light edge, not from blur ---------- */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.30);
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.40), 0 0 0 1px rgb(255 255 255 / 0.02);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.03);
+  --shadow-lg: 0 18px 44px -14px rgb(0 0 0 / 0.80), 0 0 0 1px rgb(255 255 255 / 0.05);
+  --shadow-raise: inset 0 1px 0 0 rgb(255 255 255 / 0.06);
+  --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px rgb(61 111 214 / 0.55);
+
+  /* ---------- type scale ---------- */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-2xs--letter-spacing: 0.02em;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5rem;
+  --text-lg--letter-spacing: -0.01em;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-xl--letter-spacing: -0.02em;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-2xl--letter-spacing: -0.025em;
+
+  /* ---------- motion ---------- */
+  --ease-ui:    cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-ui:   150ms;
+  --duration-slow: 240ms;
+
+  --animate-halo:    halo 1.8s var(--ease-ui) infinite;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+  --animate-rise:    rise var(--duration-slow) var(--ease-enter);
+  --animate-pop:     pop var(--duration-ui) var(--ease-enter);
+
+  @keyframes halo {
+    0%   { box-shadow: 0 0 0 0 currentColor; opacity: 0.55; }
+    70%  { box-shadow: 0 0 0 5px transparent; opacity: 0; }
+    100% { box-shadow: 0 0 0 0 transparent; opacity: 0; }
+  }
+  @keyframes shimmer {
+    from { background-position: -160% 0; }
+    to   { background-position: 260% 0; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: translateY(4px) scale(0.98); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* ---------- content widths ---------- */
+  --container-page:   72rem;
+  --container-form:   45rem;
+  --container-narrow: 35rem;
+  --container-auth:   22.5rem;
 }
 
+/* ---------- base ---------- */
 html {
   color-scheme: dark;
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-200 antialiased;
+  @apply bg-bg text-fg-muted text-sm antialiased;
+  font-family: var(--font-sans);
+  /* stops the horizontal jump when a page grows past one viewport */
+  scrollbar-gutter: stable;
 }
 
 ::selection {
-  @apply bg-indigo-500/40;
+  @apply bg-accent/35 text-fg;
 }
 
-/* thin scrollbars for log panes */
-.log-scroll::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* one global focus policy — mouse clicks never draw a ring */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-radius: var(--radius-sm);
 }
-.log-scroll::-webkit-scrollbar-thumb {
-  @apply rounded bg-zinc-700;
+
+/* numbers that live in columns must not dance */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- utilities ---------- */
+@utility transition-ui {
+  transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+  transition-duration: var(--duration-ui);
+  transition-timing-function: var(--ease-ui);
+}
+
+/* thin scrollbars — log panes, history list, prune output */
+@utility scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background-color: var(--color-border-strong);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: #3a3a42;
+  }
+}
+
+@utility skeleton {
+  background-color: var(--color-surface-2);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(255 255 255 / 0.045) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  animation: var(--animate-shimmer);
+  border-radius: var(--radius-sm);
+}
+
+/* legacy hook kept so pages that still reference it keep their scrollbars */
+.log-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+.log-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
 .log-scroll::-webkit-scrollbar-track {
   background: transparent;
+}
+.log-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background-color: var(--color-border-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
 }

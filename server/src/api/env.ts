@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getApp, getEnvVars, replaceEnvVars } from '../db/repo.js';
+import { envSchemaFull } from './apps.js';
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -35,6 +36,13 @@ export async function envRoutes(f: FastifyInstance) {
       app.id,
       [...deduped.entries()].map(([key, value]) => ({ key, value }))
     );
-    return { ok: true, redeployRequired: !!app.active_deployment_id };
+    // recomputed after the write so the Environment tab can flip its banner without a refetch
+    const schema = envSchemaFull(app);
+    return {
+      ok: true,
+      redeployRequired: !!app.active_deployment_id,
+      missingKeys: schema?.missingKeys ?? [],
+      envSatisfied: schema ? schema.satisfied : true,
+    };
   });
 }

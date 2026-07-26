@@ -1,66 +1,223 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Api } from '../api/client';
-import { Spinner, StatusBadge, timeAgo } from '../components/ui';
+import { Api, type App } from '../api/client';
+import {
+  AlertTriangle,
+  AppCardSkeleton,
+  Box,
+  Button,
+  ButtonLink,
+  Card,
+  Chip,
+  EmptyState,
+  ExternalLink,
+  GitBranch,
+  Input,
+  PageHeader,
+  Plus,
+  RelativeTime,
+  Search,
+  StatusBadge,
+  shortRepo,
+} from '../components/ui';
 
 export default function AppsList() {
   const apps = useQuery({ queryKey: ['apps'], queryFn: Api.apps.list, refetchInterval: 10000 });
+  const [q, setQ] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // `/` and ⌘K jump to the filter, the way every list view worth using does
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const el = document.activeElement;
+      const typing = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement;
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !typing)) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const list = apps.data ?? [];
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return list;
+    return list.filter((a) => a.name.toLowerCase().includes(needle) || a.repoUrl.toLowerCase().includes(needle));
+  }, [list, q]);
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-zinc-100">Apps</h1>
-        <Link to="/new" className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">
-          + New app
-        </Link>
-      </div>
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            Apps
+            {apps.data && <Chip tone="neutral">{list.length}</Chip>}
+          </span>
+        }
+        actions={
+          <>
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-fg-faint" />
+              <Input
+                ref={searchRef}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search apps"
+                aria-label="Search apps"
+                spellCheck={false}
+                className="w-[220px] pl-8"
+              />
+            </div>
+            <ButtonLink variant="primary" to="/new" icon={<Plus className="h-3.5 w-3.5" />}>
+              New App
+            </ButtonLink>
+          </>
+        }
+      />
 
-      {apps.isLoading && <Spinner />}
-      {apps.isError && <p className="text-red-400">Failed to load apps: {(apps.error as Error).message}</p>}
+      {apps.isError && (
+        <Card tone="danger" padding="md">
+          <div className="flex flex-wrap items-center gap-3">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-danger-fg" />
+            <span className="min-w-0 text-sm text-danger-fg">
+              Could not load apps — {(apps.error as Error).message}
+            </span>
+            <Button variant="secondary" className="ml-auto" onClick={() => apps.refetch()}>
+              Retry
+            </Button>
+          </div>
+        </Card>
+      )}
 
-      {apps.data && apps.data.length === 0 && (
-        <div className="rounded-lg border border-dashed border-zinc-700 p-10 text-center">
-          <p className="text-zinc-400">No apps yet.</p>
-          <p className="mt-1 text-sm text-zinc-500">
-            Hit <span className="text-zinc-300">“New app”</span>, paste a repo URL, and it'll be live in a minute.
-          </p>
+      {apps.isPending && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }, (_, i) => (
+            <AppCardSkeleton key={i} />
+          ))}
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {apps.data?.map((app) => (
-          <Link
-            key={app.id}
-            to={`/apps/${app.id}`}
-            className="group rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 transition-colors hover:border-zinc-600"
-          >
-            <div className="flex items-center justify-between">
-              <span className="font-medium text-zinc-100 group-hover:text-white">{app.name}</span>
-              <StatusBadge status={app.status} />
-            </div>
-            <div className="mt-1 truncate text-xs text-zinc-500">{app.repoUrl}</div>
-            <div className="mt-3 flex items-center justify-between text-xs">
-              {app.type !== 'worker' ? (
-                <span
-                  className="truncate text-indigo-400 hover:underline"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    window.open(app.url, '_blank');
-                  }}
-                >
-                  {app.effectiveHost}
-                </span>
-              ) : (
-                <span className="text-zinc-500">worker</span>
-              )}
-              <span className="text-zinc-600">
-                {app.lastDeployment ? `deployed ${timeAgo(app.lastDeployment.finishedAt ?? app.lastDeployment.createdAt)}` : 'never deployed'}
-              </span>
-            </div>
-          </Link>
-        ))}
-      </div>
+      {apps.data && list.length === 0 && (
+        <EmptyState
+          icon={<Box className="h-4 w-4" />}
+          title="No apps yet"
+          description="Paste a Git repo URL and deployer clones it, detects the stack, builds an image, and routes traffic with TLS."
+          action={{ label: 'Deploy your first app', to: '/new' }}
+        />
+      )}
+
+      {apps.data && list.length > 0 && filtered.length === 0 && (
+        <EmptyState
+          icon={<Search className="h-4 w-4" />}
+          title="No matches"
+          description={`Nothing matches “${q.trim()}”. Try the repo owner or a shorter fragment.`}
+          secondaryAction={{ label: 'Clear search', onClick: () => setQ('') }}
+        />
+      )}
+
+      {filtered.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((app) => (
+            <AppCard key={app.id} app={app} />
+          ))}
+        </div>
+      )}
     </div>
+  );
+}
+
+function AppCard({ app }: { app: App }) {
+  const last = app.lastDeployment;
+  const deployedAt = last?.finishedAt ?? last?.createdAt ?? null;
+  const missing = app.envStatus && !app.envStatus.satisfied ? app.envStatus.missingCount : 0;
+
+  return (
+    <Card interactive as={Link} to={`/apps/${app.id}`} className="min-w-0 p-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="min-w-0 truncate text-sm font-medium text-fg group-hover:text-white">{app.name}</span>
+        <StatusBadge status={app.status} className="ml-auto" />
+      </div>
+
+      <div className="mt-2 flex h-5 min-w-0 items-center gap-1.5">
+        {app.isWorker ? (
+          <WorkerLine app={app} />
+        ) : app.effectiveHost ? (
+          <HostLink host={app.effectiveHost} url={app.url} />
+        ) : (
+          <span className="text-xs text-fg-faint">No URL yet</span>
+        )}
+        {missing > 0 && (
+          <Chip tone="info" size="sm" className="ml-auto">
+            {missing} var{missing === 1 ? '' : 's'} needed
+          </Chip>
+        )}
+      </div>
+
+      <div className="-mx-4 mt-3 border-t border-border-subtle" />
+
+      <div className="flex min-w-0 items-center gap-2 pt-3 text-xs text-fg-subtle">
+        <GitBranch className="h-3.5 w-3.5 shrink-0 text-fg-faint" />
+        <span className="min-w-0 truncate font-mono">{shortRepo(app.repoUrl)}</span>
+        {app.branch && (
+          <Chip mono size="sm" className="hidden sm:inline-flex">
+            {app.branch}
+          </Chip>
+        )}
+        <span className="ml-auto shrink-0">
+          {deployedAt ? <RelativeTime iso={deployedAt} /> : <span className="text-fg-faint">Never deployed</span>}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+/** A real focusable control so keyboard users reach the deployed URL without opening the app. */
+function HostLink({ host, url }: { host: string; url: string | null }) {
+  const open = () => {
+    if (url) window.open(url, '_blank', 'noreferrer');
+  };
+  return (
+    <span
+      role="link"
+      tabIndex={0}
+      title={url ?? host}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        open();
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        e.stopPropagation();
+        open();
+      }}
+      className="inline-flex min-w-0 items-center gap-1 rounded-sm font-mono text-xs text-accent-fg hover:underline"
+    >
+      <span className="min-w-0 truncate">{host}</span>
+      <ExternalLink className="h-3 w-3 shrink-0 opacity-0 transition-ui group-hover:opacity-100 group-focus-within:opacity-100 max-sm:opacity-100" />
+    </span>
+  );
+}
+
+/**
+ * Workers have no URL, so the card shows whether the process is up. `/api/apps`
+ * deliberately carries no per-container detail — one `docker ps` covers the whole
+ * list, and an inspect per app on a 10s poll is not worth uptime on a card. The
+ * detail page has the container and shows uptime and restarts there.
+ */
+function WorkerLine({ app }: { app: App }) {
+  const label = app.status === 'live' ? 'running' : app.status === 'deploying' ? 'starting' : 'not running';
+  return (
+    <>
+      <Chip tone="neutral" size="sm">
+        worker
+      </Chip>
+      <span className="min-w-0 truncate font-mono text-xs text-fg-subtle">{label}</span>
+    </>
   );
 }

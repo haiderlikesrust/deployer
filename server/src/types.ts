@@ -7,12 +7,18 @@ export type DeploymentStatus =
   | 'building'
   | 'starting'
   | 'checking'
+  /** Terminal, and deliberately not a failure: required env vars were missing, so nothing was built. */
+  | 'needs_env'
   | 'live'
   | 'superseded'
   | 'failed'
   | 'canceled';
 
-/** Statuses that mean "this deployment is still moving through the pipeline". */
+/**
+ * Statuses that mean "this deployment is still moving through the pipeline".
+ * 'needs_env' is terminal, so it stays out — that alone makes the boot
+ * reconciler, the cancel path and the app status computation behave.
+ */
 export const IN_FLIGHT_STATUSES: DeploymentStatus[] = ['queued', 'cloning', 'resolving', 'building', 'starting', 'checking'];
 
 export interface AppRow {
@@ -33,6 +39,11 @@ export interface AppRow {
   git_token: string | null;
   webhook_secret: string | null;
   active_deployment_id: number | null;
+  /** Latest parsed .env.example schema (JSON of EnvSchema); null = repo has none. */
+  env_schema_json: string | null;
+  env_schema_detected_at: string | null;
+  /** 1 = user chose "deploy anyway"; the .env.example gate is skipped. */
+  skip_env_check: number;
   created_at: string;
   updated_at: string;
 }
@@ -57,9 +68,34 @@ export interface DeploymentRow {
   image_tag: string | null;
   container_id: string | null;
   log_file: string | null;
+  /** Snapshot of the env-example schema at this commit. */
+  env_schema_json: string | null;
+  /** JSON string[] of required keys that were unset; only set on 'needs_env'. */
+  env_missing_json: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+/** One variable declared by a repo's .env.example (or equivalent). */
+export interface EnvVarSpec {
+  key: string;
+  required: boolean;
+  description: string | null;
+  /** Concrete default from the file; null when the value was a placeholder. */
+  example: string | null;
+  /** Name heuristic — a UI masking hint, nothing more. */
+  secret: boolean;
+  group: string | null;
+  commentedOut: boolean;
+}
+
+export interface EnvSchema {
+  /** Path relative to the resolved build root. */
+  file: string;
+  detectedAt: string;
+  commitSha: string | null;
+  vars: EnvVarSpec[];
 }
 
 export type Builder = 'dockerfile' | 'node' | 'node-static' | 'python' | 'static';
@@ -85,4 +121,8 @@ export interface ResolvedConfig {
   sources: Record<string, ConfigSource>;
   /** Human-readable detection notes, printed into the build log. */
   notes: string[];
+  /** Why this app type was chosen — printed to the build log and shown in the UI. */
+  typeReason: string;
+  /** The signal that proved this serves HTTP; null for workers and static sites. */
+  webEvidence: string | null;
 }

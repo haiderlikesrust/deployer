@@ -4,7 +4,6 @@ import { config, paths } from '../config.js';
 import {
   containerName,
   docker,
-  imageRepo,
   listAppImages,
   listManagedContainers,
   parseLabels,

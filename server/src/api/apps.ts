@@ -6,6 +6,7 @@ import {
   deleteApp,
   getApp,
   getAppByName,
+  getEnvVars,
   inFlightDeploymentForApp,
   latestDeploymentForApp,
   getDeployment,
@@ -14,7 +15,9 @@ import {
   updateApp,
   type AppPatch,
 } from '../db/repo.js';
-import type { AppRow, DeploymentRow } from '../types.js';
+import type { AppRow, AppType, DeploymentRow, EnvSchema, ResolvedConfig } from '../types.js';
+import { missingRequiredKeys } from '../core/detect/envexample.js';
+import type { ContainerState } from '../core/docker.js';
 import { cancelAllForApp, enqueueDeploy } from '../core/queue.js';
 import { sweepAppResources } from '../core/cleanup.js';
 import { deleteLogFile } from '../core/buildlogs.js';
@@ -22,7 +25,6 @@ import { registerSecret, forgetSecret } from '../core/secrets.js';
 import {
   inspectContainer,
   listManagedContainers,
-  parseLabels,
   restartContainer,
   startContainer,
   stopContainer,
@@ -67,7 +69,10 @@ const patchSchema = z.object({
   rootDir: singleLine(200).nullish(),
   memoryLimit: z.string().regex(/^\d+[bkmg]?$/i, 'e.g. 512m or 1g').nullish(),
   gitToken: singleLine(300).nullish(),
+  skipEnvCheck: z.boolean().optional(),
 });
+
+const deploySchema = z.object({ skipEnvCheck: z.boolean().optional() });
 
 function slugFromRepoUrl(url: string): string {
   const last = url.replace(/\/+$/, '').split(/[/:]/).pop() ?? 'app';
@@ -89,10 +94,21 @@ function uniqueName(base: string): string {
   return name;
 }
 
-export type AppStatus = 'deploying' | 'live' | 'stopped' | 'failed' | 'new';
+export type AppStatus = 'deploying' | 'live' | 'stopped' | 'failed' | 'needs_env' | 'new';
+
+/** Compact env-example state, for list rows and headers. */
+export interface EnvStatus {
+  file: string;
+  requiredCount: number;
+  missingCount: number;
+  satisfied: boolean;
+}
+
+export type EnvSchemaFull = EnvSchema & { missingKeys: string[]; satisfied: boolean };
 
 function deploymentSummary(d: DeploymentRow | null) {
   if (!d) return null;
+  const missing = d.env_missing_json ? (safeParse(d.env_missing_json) as string[] | null) : null;
   return {
     id: d.id,
     status: d.status,
@@ -102,20 +118,101 @@ function deploymentSummary(d: DeploymentRow | null) {
     commitMsg: d.commit_msg,
     createdAt: d.created_at,
     finishedAt: d.finished_at,
+    envMissingCount: Array.isArray(missing) ? missing.length : null,
+  };
+}
+
+function safeParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+function parseSchema(json: string | null): EnvSchema | null {
+  if (!json) return null;
+  const parsed = safeParse(json) as EnvSchema | null;
+  return parsed && Array.isArray(parsed.vars) ? parsed : null;
+}
+
+/**
+ * Env keys with a non-empty value right now — an empty value is not "provided".
+ * Keys supplied by the repo's deploy.yml count too, or an app satisfied that way
+ * would build fine yet be reported as missing variables forever. The pipeline
+ * gate answers from the same merged set (cfg.env).
+ */
+function providedKeys(app: AppRow): Set<string> {
+  const keys = new Set(getEnvVars(app.id).filter((v) => v.value !== '').map((v) => v.key));
+  const active = app.active_deployment_id ? getDeployment(app.active_deployment_id) : latestDeploymentForApp(app.id);
+  const cfg = active?.config_json ? (safeParse(active.config_json) as Partial<ResolvedConfig> | null) : null;
+  for (const [key, value] of Object.entries(cfg?.env ?? {})) {
+    if (value !== '') keys.add(key);
+  }
+  return keys;
+}
+
+export function envSchemaFull(app: AppRow): EnvSchemaFull | null {
+  const schema = parseSchema(app.env_schema_json);
+  if (!schema) return null;
+  const missingKeys = missingRequiredKeys(schema, providedKeys(app));
+  return { ...schema, missingKeys, satisfied: missingKeys.length === 0 };
+}
+
+function envStatusFor(app: AppRow): EnvStatus | null {
+  const schema = parseSchema(app.env_schema_json);
+  if (!schema) return null;
+  const missing = missingRequiredKeys(schema, providedKeys(app));
+  return {
+    file: schema.file,
+    requiredCount: schema.vars.filter((v) => v.required).length,
+    missingCount: missing.length,
+    satisfied: missing.length === 0,
+  };
+}
+
+/** Effective type: explicit setting, else what the last resolve decided. */
+function effectiveAppType(app: AppRow): AppType | null {
+  if (app.type) return app.type;
+  const fromDeployment = (d: DeploymentRow | null): AppType | null => {
+    if (!d?.config_json) return null;
+    const cfg = safeParse(d.config_json) as Partial<ResolvedConfig> | null;
+    return cfg?.type ?? null;
+  };
+  const active = app.active_deployment_id ? getDeployment(app.active_deployment_id) : null;
+  return fromDeployment(active) ?? fromDeployment(latestDeploymentForApp(app.id));
+}
+
+function containerInfo(c: ContainerState) {
+  const startedMs = c.startedAt ? Date.parse(c.startedAt) : NaN;
+  return {
+    running: c.running,
+    status: c.status,
+    startedAt: c.startedAt,
+    finishedAt: c.finishedAt,
+    exitCode: c.exitCode,
+    restartCount: c.restartCount,
+    oomKilled: c.oomKilled,
+    health: c.health,
+    uptimeSeconds: c.running && Number.isFinite(startedMs) ? Math.max(0, Math.floor((Date.now() - startedMs) / 1000)) : null,
   };
 }
 
 export function appView(app: AppRow, extra: Record<string, unknown> = {}) {
-  const { git_token, ...rest } = app;
+  const effectiveType = effectiveAppType(app);
+  // workers have no HTTP route at all — never hand the UI a host it could link to
+  const isWorker = effectiveType === 'worker';
   return {
     id: app.id,
     name: app.name,
     repoUrl: app.repo_url,
     branch: app.branch,
     type: app.type,
+    effectiveType,
+    isWorker,
     domain: app.domain,
-    effectiveHost: appHost(app.name, app.domain),
-    url: appUrl(app.name, app.domain),
+    effectiveHost: isWorker ? null : appHost(app.name, app.domain),
+    url: isWorker ? null : appUrl(app.name, app.domain),
     port: app.port,
     buildCmd: app.build_cmd,
     startCmd: app.start_cmd,
@@ -123,8 +220,10 @@ export function appView(app: AppRow, extra: Record<string, unknown> = {}) {
     dockerfilePath: app.dockerfile_path,
     rootDir: app.root_dir,
     memoryLimit: app.memory_limit,
-    hasGitToken: !!git_token,
+    hasGitToken: !!app.git_token,
     activeDeploymentId: app.active_deployment_id,
+    skipEnvCheck: app.skip_env_check === 1,
+    envStatus: envStatusFor(app),
     createdAt: app.created_at,
     updatedAt: app.updated_at,
     ...extra,
@@ -146,13 +245,14 @@ async function computeStatuses(apps: AppRow[]): Promise<Map<number, AppStatus>> 
       map.set(app.id, 'deploying');
       continue;
     }
+    // an app that is already live stays live — a needs_env attempt never touched its container
     if (app.active_deployment_id) {
       const name = `dep-${app.name}-${app.active_deployment_id}`;
       map.set(app.id, running.has(name) ? 'live' : 'stopped');
       continue;
     }
     const last = latestDeploymentForApp(app.id);
-    map.set(app.id, last?.status === 'failed' ? 'failed' : 'new');
+    map.set(app.id, last?.status === 'needs_env' ? 'needs_env' : last?.status === 'failed' ? 'failed' : 'new');
   }
   return map;
 }
@@ -208,8 +308,19 @@ export async function appRoutes(f: FastifyInstance) {
       status: statuses.get(app.id) ?? 'new',
       activeDeployment: deploymentSummary(active),
       lastDeployment: deploymentSummary(latestDeploymentForApp(app.id)),
-      container: container ? { running: container.running, status: container.status, startedAt: container.startedAt } : null,
+      container: container ? containerInfo(container) : null,
+      envSchema: envSchemaFull(app),
     });
+  });
+
+  f.get('/apps/:id/env-schema', async (req, reply) => {
+    const app = getApp(Number((req.params as any).id));
+    if (!app) return reply.code(404).send({ error: 'not found' });
+    return {
+      schema: envSchemaFull(app),
+      skipEnvCheck: app.skip_env_check === 1,
+      detectedAt: app.env_schema_detected_at,
+    };
   });
 
   f.patch('/apps/:id', async (req, reply) => {
@@ -231,6 +342,7 @@ export async function appRoutes(f: FastifyInstance) {
     if (d.dockerfilePath !== undefined) patch.dockerfile_path = d.dockerfilePath || null;
     if (d.rootDir !== undefined) patch.root_dir = d.rootDir || null;
     if (d.memoryLimit !== undefined) patch.memory_limit = d.memoryLimit || null;
+    if (d.skipEnvCheck !== undefined) patch.skip_env_check = d.skipEnvCheck ? 1 : 0;
     if (d.gitToken !== undefined) {
       forgetSecret(app.git_token);
       patch.git_token = d.gitToken?.trim() || null;
@@ -257,6 +369,10 @@ export async function appRoutes(f: FastifyInstance) {
   f.post('/apps/:id/deploy', async (req, reply) => {
     const app = getApp(Number((req.params as any).id));
     if (!app) return reply.code(404).send({ error: 'not found' });
+    const body = deploySchema.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: body.error.issues[0]?.message ?? 'invalid input' });
+    // "deploy anyway" is sticky: persist it before queueing so the gate sees it
+    if (body.data.skipEnvCheck === true) updateApp(app.id, { skip_env_check: 1 });
     const dep = enqueueDeploy(app.id, 'manual');
     reply.code(201).send({ deploymentId: dep.id });
   });
