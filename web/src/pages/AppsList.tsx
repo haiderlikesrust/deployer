@@ -13,6 +13,7 @@ import {
   EmptyState,
   ExternalLink,
   GitBranch,
+  Identicon,
   Input,
   PageHeader,
   Plus,
@@ -136,8 +137,9 @@ function AppCard({ app }: { app: App }) {
   const missing = app.envStatus && !app.envStatus.satisfied ? app.envStatus.missingCount : 0;
 
   return (
-    <Card interactive as={Link} to={`/apps/${app.id}`} className="min-w-0 p-4">
-      <div className="flex min-w-0 items-center gap-3">
+    <Card interactive as={Link} to={`/apps/${app.id}`} className="card-interactive min-w-0 p-4">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <Identicon name={app.name} size="md" />
         <span className="min-w-0 truncate text-sm font-medium text-fg group-hover:text-white">{app.name}</span>
         <StatusBadge status={app.status} className="ml-auto" />
       </div>

@@ -27,6 +27,7 @@ import {
   Field,
   GitBranch,
   IconButton,
+  Identicon,
   Info,
   Input,
   KeyValue,
@@ -173,6 +174,7 @@ export default function AppDetail() {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3">
+        <Identicon name={a.name} size="lg" />
         <h1 className="max-w-full truncate text-xl font-semibold tracking-[-0.02em] text-fg">{a.name}</h1>
         <StatusBadge status={status} />
         <div className="ml-auto flex flex-1 flex-wrap items-center gap-2 sm:flex-none">

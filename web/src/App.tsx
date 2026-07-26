@@ -129,7 +129,7 @@ function Header({ sseDown }: { sseDown: boolean }) {
       <div className="mx-auto flex h-14 max-w-page items-center gap-2 px-4 sm:px-6">
         <Link to="/" className="flex shrink-0 items-center gap-2 rounded-sm text-fg">
           <Logo className="h-5 w-5" />
-          <span className="text-sm font-medium">deployer</span>
+          <span className="text-gradient-brand text-sm font-semibold tracking-tight">deployer</span>
         </Link>
         {hasApp && app.data && (
           <>

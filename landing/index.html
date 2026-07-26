@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>deployer — paste a repo, get a URL</title>
+    <meta name="description" content="A self-hosted mini-PaaS for your own VPS. Paste a Git repo URL and your app is live on your domain with automatic HTTPS — builds detected, containers managed, zero server config." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="glow glow-a" aria-hidden="true"></div>
+    <div class="glow glow-b" aria-hidden="true"></div>
+
+    <header class="nav">
+      <a class="brand" href="#top"><span class="brand-mark">🚀</span><span class="brand-name">deployer</span></a>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="/docs" data-docs>Docs</a>
+        <a href="https://github.com/haiderlikesrust/deployer" rel="noopener">GitHub</a>
+      </nav>
+      <a class="btn btn-primary btn-sm" href="/dashboard" data-dashboard>Open dashboard</a>
+    </header>
+
+    <main id="top">
+      <!-- ═══════════════ hero ═══════════════ -->
+      <section class="hero">
+        <p class="hero-eyebrow">Self-hosted · open source · one VPS is enough</p>
+        <h1>Paste a repo.<br /><span class="grad">Get a URL.</span></h1>
+        <p class="hero-sub">
+          deployer is a tiny PaaS that lives on <em>your</em> server. It clones your Git repo, figures out how to
+          build it, runs it in a container, and puts it live on your domain with automatic HTTPS — websites,
+          APIs, bots and workers alike. No YAML rituals. No per-project server config. Ever.
+        </p>
+        <div class="hero-ctas">
+          <a class="btn btn-primary" href="#install">Install on your VPS</a>
+          <a class="btn btn-ghost" href="/docs" data-docs>Read the docs →</a>
+        </div>
+
+        <div class="terminal" aria-label="Demo of a deployment">
+          <div class="terminal-bar">
+            <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+            <span class="terminal-title">deploy log</span>
+          </div>
+          <pre class="terminal-body" id="termDemo"><span class="t-dim">$</span> git push origin main
+<span class="t-cyan">==&gt;</span> Cloning github.com/you/your-app
+<span class="t-cyan">==&gt;</span> Resolving build configuration
+    <span class="t-dim">express dependency — running as a web app on port 3000</span>
+<span class="t-cyan">==&gt;</span> Building image
+<span class="t-cyan">==&gt;</span> Starting container
+<span class="t-cyan">==&gt;</span> Health check <span class="t-green">passed</span>
+<span class="t-green">✓ Live at https://your-app.yourdomain.com</span></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════ features ═══════════════ -->
+      <section id="features" class="section">
+        <h2>Everything a one-person platform needs</h2>
+        <p class="section-sub">The features you'd reach for on Vercel or Railway — running on hardware you own, for apps you own.</p>
+        <div class="grid">
+          <div class="feature">
+            <div class="feature-icon">🔍</div>
+            <h3>Zero-config builds</h3>
+            <p>A Dockerfile is used if present; otherwise the stack is detected — Node, Python, static sites — and a clean production Dockerfile is generated and shown in the build log.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🤖</div>
+            <h3>Bots &amp; workers, first-class</h3>
+            <p>Not every deploy is a website. Repos without a web framework run as workers — no fake health checks, no dead URLs, crash alerts straight to your phone.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🔐</div>
+            <h3>Automatic HTTPS</h3>
+            <p>Every app gets <span class="mono">name.yourdomain.com</span> with a Let's Encrypt certificate. Custom domains are one field. Wildcard DNS once, never again.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">⚡</div>
+            <h3>Push to deploy</h3>
+            <p>A GitHub webhook with HMAC verification deploys every push to your branch. Or curl one URL from anywhere — CI, cron, a Raspberry Pi.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🛟</div>
+            <h3>Deploys that can't hurt you</h3>
+            <p>New versions must pass a health gate before traffic switches. Failed builds never touch what's live. One-click rollback re-runs the previous image in seconds.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🧩</div>
+            <h3>.env.example, understood</h3>
+            <p>deployer reads your env example file, knows which keys are required, and asks you to fill them in <em>before</em> building — instead of crashing at 2am.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">📟</div>
+            <h3>Live logs &amp; history</h3>
+            <p>Streaming build logs, runtime logs, deployment history with commit messages and durations — and the exact resolved config of every deploy, source-labelled.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">📣</div>
+            <h3>Telegram &amp; Discord alerts</h3>
+            <p>Deploy succeeded, deploy failed, app crash-looping, missing env vars — pushed to your phone the moment they happen.</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🗂</div>
+            <h3>Monorepos</h3>
+            <p>Point an app at any subdirectory. Deploy one repo five times as five apps — frontend, API, worker, docs, landing page.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════ how it works ═══════════════ -->
+      <section id="how" class="section">
+        <h2>How it works</h2>
+        <p class="section-sub">Two containers on your VPS. Traefik owns the ports, deployer owns the workflow, your apps own the traffic.</p>
+        <ol class="steps">
+          <li><b>Install once.</b> One command audits your VPS, sets up Traefik + deployer, and prints your dashboard URL and password.</li>
+          <li><b>Point DNS.</b> An A record and a wildcard. That's the last DNS you'll configure.</li>
+          <li><b>Paste a repo.</b> deployer clones, detects, builds an image, starts the container on a private network, and routes your domain to it.</li>
+          <li><b>Push code.</b> The webhook deploys every push. Health-gated swaps, retained images for rollback, old images pruned automatically.</li>
+        </ol>
+        <div class="arch">
+          <span class="arch-node">git push</span><span class="arch-arrow">→</span>
+          <span class="arch-node">webhook</span><span class="arch-arrow">→</span>
+          <span class="arch-node">build</span><span class="arch-arrow">→</span>
+          <span class="arch-node">health gate</span><span class="arch-arrow">→</span>
+          <span class="arch-node live">live + TLS</span>
+        </div>
+      </section>
+
+      <!-- ═══════════════ install ═══════════════ -->
+      <section id="install" class="section">
+        <h2>Install in one line</h2>
+        <p class="section-sub">Ubuntu/Debian VPS, 2&nbsp;GB RAM recommended. No domain yet? It offers you an sslip.io address so you can deploy in minutes.</p>
+        <div class="code-block">
+          <button class="copy" id="copyInstall" aria-label="Copy install command">Copy</button>
+          <pre id="installCmd">curl -fsSL https://raw.githubusercontent.com/haiderlikesrust/deployer/main/install/install.sh \
+  | sudo bash -s -- --base-domain yourdomain.com --email you@yourdomain.com</pre>
+        </div>
+        <p class="fineprint">
+          Open source · MIT-spirited · read the <a href="/docs" data-docs>docs</a> and the security model before
+          exposing anything. Your VPS, your rules.
+        </p>
+      </section>
+
+      <!-- ═══════════════ closing cta ═══════════════ -->
+      <section class="section closing">
+        <h2 class="grad">Stop redoing server config.</h2>
+        <p class="section-sub">The next app you build deserves to be one paste away from production.</p>
+        <div class="hero-ctas center">
+          <a class="btn btn-primary" href="#install">Install deployer</a>
+          <a class="btn btn-ghost" href="https://github.com/haiderlikesrust/deployer" rel="noopener">Star on GitHub</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>🚀 deployer — deployed by deployer</span>
+      <nav>
+        <a href="/docs" data-docs>Docs</a>
+        <a href="/dashboard" data-dashboard>Dashboard</a>
+        <a href="https://github.com/haiderlikesrust/deployer" rel="noopener">GitHub</a>
+      </nav>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
