@@ -88,6 +88,11 @@ export async function sweepAppResources(appName: string) {
   for (const img of images) {
     await removeImage(`${img.Repository}:${img.Tag}`).catch(() => {});
   }
+  // persistent volumes go with the app (the delete dialog says so)
+  const vols = await docker(['volume', 'ls', '--filter', `label=deployer.app=${appName}`, '--format', '{{.Name}}']);
+  for (const name of vols.stdout.split('\n').map((s) => s.trim()).filter(Boolean)) {
+    await docker(['volume', 'rm', name]);
+  }
   await fsp.rm(`${paths.builds()}/${appName}`, { recursive: true, force: true }).catch(() => {});
 }
 

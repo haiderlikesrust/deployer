@@ -197,6 +197,9 @@ export interface App {
   /** detail endpoint only */
   envSchema?: EnvSchemaFull | null;
   webhook?: WebhookInfo | null;
+  volumes?: AppVolume[];
+  releaseCmd?: string | null;
+  services?: LinkedService[];
 }
 
 export interface EnvSchemaResponse {
@@ -256,6 +259,38 @@ export interface WebhookInfo {
   secret: string;
   githubUrl: string;
   genericUrl: string;
+}
+
+export interface AppVolume {
+  name: string;
+  path: string;
+}
+
+export interface LinkedService {
+  serviceId: number;
+  name: string;
+  type: string;
+  envKey: string;
+}
+
+export interface Service {
+  id: number;
+  name: string;
+  type: 'postgres' | 'redis' | 'mongo';
+  version: string;
+  createdAt: string;
+  host: string;
+  running: boolean;
+  status: string;
+  url: string;
+  links: { appId: number; appName: string; envKey: string }[];
+  backups?: ServiceBackup[];
+}
+
+export interface ServiceBackup {
+  file: string;
+  sizeBytes: number;
+  createdAt: string;
 }
 
 export interface CreateAppInput {
@@ -322,6 +357,21 @@ export const Api = {
       notifyEvents?: Partial<NotifyEvents>;
     }) => req<{ ok: boolean }>('/settings', { method: 'PUT', body: JSON.stringify(patch) }),
     notifyTest: () => req<{ ok: boolean; errors: string[] }>('/settings/notify-test', { method: 'POST' }),
+  },
+
+  services: {
+    list: () => req<Service[]>('/services'),
+    get: (id: number) => req<Service>(`/services/${id}`),
+    create: (input: { name: string; type: string; version?: string }) =>
+      req<Service>('/services', { method: 'POST', body: JSON.stringify(input) }),
+    remove: (id: number, force = false) => req<void>(`/services/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' }),
+    start: (id: number) => req<{ ok: boolean }>(`/services/${id}/start`, { method: 'POST' }),
+    link: (id: number, appId: number, envKey?: string) =>
+      req<{ ok: boolean }>(`/services/${id}/link`, { method: 'POST', body: JSON.stringify({ appId, envKey }) }),
+    unlink: (id: number, appId: number) =>
+      req<{ ok: boolean }>(`/services/${id}/unlink`, { method: 'POST', body: JSON.stringify({ appId }) }),
+    backup: (id: number) => req<{ ok: boolean; backup: ServiceBackup }>(`/services/${id}/backup`, { method: 'POST' }),
+    backupUrl: (id: number, file: string) => `/api/services/${id}/backups/${encodeURIComponent(file)}`,
   },
 
   system: {

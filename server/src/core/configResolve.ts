@@ -3,13 +3,13 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { appHost } from '../config.js';
-import type { AppRow, AppType, ConfigSource, ResolvedConfig } from '../types.js';
+import type { AppRow, AppType, AppVolume, ConfigSource, ResolvedConfig } from '../types.js';
 import { findDockerfile, sniffExpose } from './detect/dockerfile.js';
 import { analyzeNode, nodeServerDockerfile, nodeStaticDockerfile } from './detect/node.js';
 import { analyzePython, pythonDockerfile } from './detect/python.js';
 import { hasRootIndexHtml, staticDockerfile, NGINX_CONF } from './detect/static.js';
 
-const DEPLOY_YML_KEYS = ['type', 'port', 'build', 'start', 'dockerfile', 'health', 'domain', 'env'] as const;
+const DEPLOY_YML_KEYS = ['type', 'port', 'build', 'start', 'dockerfile', 'health', 'domain', 'env', 'release', 'volumes'] as const;
 
 const deployYmlSchema = z.object({
   type: z.enum(['web', 'worker', 'static']).optional(),
@@ -20,6 +20,9 @@ const deployYmlSchema = z.object({
   health: z.string().regex(/^\//, 'health must be a path starting with /').optional(),
   domain: z.string().optional(),
   env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+  release: z.string().optional(),
+  /** volumes: { data: /app/data } — name to container mount path */
+  volumes: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, 'volume names are dns-safe slugs'), z.string().regex(/^\//, 'mount paths are absolute')).optional(),
 });
 
 type DeployYml = z.infer<typeof deployYmlSchema>;
@@ -75,7 +78,7 @@ export function resolveConfig(
   app: AppRow,
   envVars: { key: string; value: string }[],
   repoDir: string,
-  opts: { previousType?: AppType | null } = {}
+  opts: { previousType?: AppType | null; serviceEnv?: Record<string, string> } = {}
 ): ResolveOutput {
   const notes: string[] = [];
   const sources: Record<string, ConfigSource> = {};
@@ -283,14 +286,33 @@ export function resolveConfig(
     }
   }
 
-  // env merge: deploy.yml env first, dashboard env overrides, PORT forced last
+  // env merge: deploy.yml < injected service URLs < dashboard, PORT forced last
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(yml.env ?? {})) env[k] = String(v);
+  for (const [k, v] of Object.entries(opts.serviceEnv ?? {})) env[k] = v;
   for (const { key, value } of envVars) env[key] = value;
   if (env.PORT && env.PORT !== String(containerPort)) {
     notes.push(`note: PORT env override (${env.PORT}) replaced with the resolved container port ${containerPort} — set "port" instead`);
   }
   env.PORT = String(containerPort);
+
+  const releaseCmd = pick('release', sanitizeCmd(app.release_cmd, 'release command'), sanitizeCmd(yml.release ?? null, 'deploy.yml release'), null);
+
+  // volumes: dashboard replaces yml wholesale (per-key merging of mounts would surprise)
+  let volumes: AppVolume[] = [];
+  const uiVolumes = parseVolumesJson(app.volumes_json);
+  if (uiVolumes.length) {
+    volumes = uiVolumes;
+    sources.volumes = 'ui';
+  } else if (yml.volumes && Object.keys(yml.volumes).length) {
+    volumes = Object.entries(yml.volumes).map(([name, p]) => ({ name, path: p }));
+    sources.volumes = 'yml';
+  }
+  if (volumes.length) {
+    notes.push(
+      `persistent volume(s): ${volumes.map((v) => `${v.name} → ${v.path}`).join(', ')} — deploys use stop-then-start (brief downtime) so two containers never share the data`
+    );
+  }
 
   const cfg: ResolvedConfig = {
     type,
@@ -306,8 +328,21 @@ export function resolveConfig(
     notes,
     typeReason,
     webEvidence,
+    volumes,
+    releaseCmd,
   };
   return { cfg, generatedDockerfile, extraContextFiles };
+}
+
+export function parseVolumesJson(json: string | null): AppVolume[] {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is AppVolume => typeof v?.name === 'string' && typeof v?.path === 'string');
+  } catch {
+    return [];
+  }
 }
 
 /** Node analysis, but soft-failing into "not a node repo" only when package.json is absent. */

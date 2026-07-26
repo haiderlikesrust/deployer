@@ -1202,6 +1202,8 @@ function SettingsTab({ app, onDeleted }: { app: App; onDeleted: () => void }) {
       dockerfilePath: app.dockerfilePath ?? '',
       rootDir: app.rootDir ?? '',
       memoryLimit: app.memoryLimit ?? '',
+      releaseCmd: app.releaseCmd ?? '',
+      volumes: (app.volumes ?? []).map((v) => ({ ...v })),
       gitToken: '',
     }),
     [app]
@@ -1212,8 +1214,10 @@ function SettingsTab({ app, onDeleted }: { app: App; onDeleted: () => void }) {
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
   const isWorker = (form.type || app.effectiveType) === 'worker';
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  const set = (k: Exclude<keyof typeof form, 'volumes'>) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm({ ...form, [k]: e.target.value });
+  const setVolume = (i: number, key: 'name' | 'path', value: string) =>
+    setForm({ ...form, volumes: form.volumes.map((v, j) => (j === i ? { ...v, [key]: value } : v)) });
 
   const save = useMutation({
     mutationFn: () =>
@@ -1229,6 +1233,8 @@ function SettingsTab({ app, onDeleted }: { app: App; onDeleted: () => void }) {
         dockerfilePath: form.dockerfilePath.trim() || null,
         rootDir: form.rootDir.trim() || null,
         memoryLimit: form.memoryLimit.trim() || null,
+        releaseCmd: form.releaseCmd.trim() || null,
+        volumes: form.volumes.filter((v) => v.name.trim() && v.path.trim()),
         ...(form.gitToken.trim() !== '' ? { gitToken: form.gitToken.trim() } : {}),
       }),
     onSuccess: () => {
@@ -1362,6 +1368,73 @@ function SettingsTab({ app, onDeleted }: { app: App; onDeleted: () => void }) {
                   <Input id="s-domain" mono value={form.domain} onChange={set('domain')} placeholder="app.example.com" spellCheck={false} />
                 </Field>
               </div>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card padding="none">
+        <CardHeader>
+          <CardTitle>Data &amp; releases</CardTitle>
+          <CardDescription>Persistent storage and the migration step that runs before every swap.</CardDescription>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <Field label="Release command" htmlFor="s-release" hint="Runs in a one-off container after build, before traffic switches. Non-zero exit = deploy stopped, current version untouched.">
+            <Input id="s-release" mono value={form.releaseCmd} onChange={set('releaseCmd')} placeholder="npx prisma migrate deploy" spellCheck={false} />
+          </Field>
+
+          <div>
+            <SectionLabel>Persistent volumes</SectionLabel>
+            <p className="mt-1 mb-2 text-xs text-fg-subtle">
+              Named volumes that survive deploys. Apps with volumes swap stop-then-start (brief downtime) so two containers never
+              share the data. Deleted with the app.
+            </p>
+            <div className="space-y-2">
+              {form.volumes.map((v, i) => (
+                <div key={i} className="flex gap-2">
+                  <Input
+                    mono
+                    aria-label={`Volume ${i + 1} name`}
+                    value={v.name}
+                    onChange={(e) => setVolume(i, 'name', e.target.value.toLowerCase())}
+                    placeholder="data"
+                    className="w-40"
+                  />
+                  <Input
+                    mono
+                    aria-label={`Volume ${i + 1} mount path`}
+                    value={v.path}
+                    onChange={(e) => setVolume(i, 'path', e.target.value)}
+                    placeholder="/app/data"
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setForm({ ...form, volumes: form.volumes.filter((_, j) => j !== i) })}
+                    title="Remove volume"
+                  >
+                    ✕
+                  </Button>
+                </div>
+              ))}
+              <Button variant="ghost" size="sm" onClick={() => setForm({ ...form, volumes: [...form.volumes, { name: '', path: '' }] })}>
+                <Plus className="h-3.5 w-3.5" /> Add volume
+              </Button>
+            </div>
+          </div>
+
+          {(app.services?.length ?? 0) > 0 && (
+            <div>
+              <SectionLabel>Linked databases</SectionLabel>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {app.services!.map((s) => (
+                  <Chip key={s.serviceId} size="sm">
+                    {s.name} <span className="font-mono text-fg-faint">→ {s.envKey}</span>
+                  </Chip>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-fg-faint">Managed on the Databases page — URLs are injected on deploy.</p>
             </div>
           )}
         </CardBody>

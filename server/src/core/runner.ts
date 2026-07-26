@@ -28,6 +28,10 @@ export async function runContainer(app: AppRow, deploymentId: number, cfg: Resol
   try {
     const args = ['run', '-d', '--name', name, '--restart', 'unless-stopped', '--network', config.dockerNetwork, '--env-file', envFile];
     for (const label of traefikLabels(app.name, deploymentId, cfg)) args.push('--label', label);
+    for (const vol of cfg.volumes ?? []) {
+      await docker(['volume', 'create', '--label', 'deployer.managed=true', '--label', `deployer.app=${app.name}`, `dep-${app.name}-${vol.name}`]);
+      args.push('-v', `dep-${app.name}-${vol.name}:${vol.path}`);
+    }
     if (app.memory_limit) args.push('--memory', app.memory_limit);
     args.push(image);
 

@@ -18,7 +18,9 @@ import { systemRoutes } from './api/system.js';
 import { sseRoutes } from './api/sse.js';
 import { healthRoutes } from './api/health.js';
 import { webhookRoutes } from './api/webhooks.js';
+import { serviceRoutes } from './api/services.js';
 import { startCrashWatcher } from './core/notify.js';
+import { reconcileServices, startBackupSchedule } from './core/services.js';
 
 async function main() {
   getDb(); // opens + migrates + creates data dirs
@@ -59,6 +61,7 @@ async function main() {
   await f.register(systemRoutes, { prefix: '/api' });
   await f.register(sseRoutes, { prefix: '/api' });
   await f.register(webhookRoutes, { prefix: '/api' });
+  await f.register(serviceRoutes, { prefix: '/api' });
 
   // --- built dashboard (same origin — no CORS, cookie auth just works) ---
   const webDist = process.env.WEB_DIST ?? path.resolve(import.meta.dirname, '../../web/dist');
@@ -79,7 +82,9 @@ async function main() {
 
   // reconcile AFTER listen so the health endpoint comes up fast
   bootReconcile((msg) => f.log.info(`reconcile: ${msg}`)).catch((e) => f.log.error(e, 'boot reconcile failed'));
+  reconcileServices((msg) => f.log.info(`services: ${msg}`)).catch((e) => f.log.error(e, 'service reconcile failed'));
   startCrashWatcher();
+  startBackupSchedule();
 
   const shutdown = async () => {
     try {

@@ -5,6 +5,8 @@ export type DeploymentStatus =
   | 'cloning'
   | 'resolving'
   | 'building'
+  /** Running the release command (migrations) — after build, before the swap. */
+  | 'releasing'
   | 'starting'
   | 'checking'
   /** Terminal, and deliberately not a failure: required env vars were missing, so nothing was built. */
@@ -19,7 +21,7 @@ export type DeploymentStatus =
  * 'needs_env' is terminal, so it stays out — that alone makes the boot
  * reconciler, the cancel path and the app status computation behave.
  */
-export const IN_FLIGHT_STATUSES: DeploymentStatus[] = ['queued', 'cloning', 'resolving', 'building', 'starting', 'checking'];
+export const IN_FLIGHT_STATUSES: DeploymentStatus[] = ['queued', 'cloning', 'resolving', 'building', 'releasing', 'starting', 'checking'];
 
 export interface AppRow {
   id: number;
@@ -44,8 +46,35 @@ export interface AppRow {
   env_schema_detected_at: string | null;
   /** 1 = user chose "deploy anyway"; the .env.example gate is skipped. */
   skip_env_check: number;
+  /** JSON array of {name, path} — named volumes mounted into the container. */
+  volumes_json: string | null;
+  /** Runs in a one-off container after build, before the swap (migrations). */
+  release_cmd: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AppVolume {
+  name: string;
+  path: string;
+}
+
+export type ServiceType = 'postgres' | 'redis' | 'mongo';
+
+export interface ServiceRow {
+  id: number;
+  name: string;
+  type: ServiceType;
+  version: string;
+  password: string;
+  created_at: string;
+}
+
+export interface ServiceLinkRow {
+  id: number;
+  service_id: number;
+  app_id: number;
+  env_key: string;
 }
 
 export interface EnvVarRow {
@@ -125,4 +154,8 @@ export interface ResolvedConfig {
   typeReason: string;
   /** The signal that proved this serves HTTP; null for workers and static sites. */
   webEvidence: string | null;
+  /** Named volumes mounted at deploy time; volumes force a stop-then-start swap. */
+  volumes: AppVolume[];
+  /** One-off command run after build, before the swap (migrations). */
+  releaseCmd: string | null;
 }

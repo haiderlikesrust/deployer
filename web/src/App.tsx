@@ -9,6 +9,7 @@ import AppsList from './pages/AppsList';
 import NewApp from './pages/NewApp';
 import AppDetail from './pages/AppDetail';
 import SystemPage from './pages/System';
+import ServicesPage from './pages/Services';
 
 export default function App() {
   // the provider has to sit above every page so `useToast()` resolves everywhere
@@ -80,6 +81,7 @@ function Shell() {
             <Route path="/" element={<AppsList />} />
             <Route path="/new" element={<NewApp />} />
             <Route path="/apps/:id" element={<AppDetail />} />
+            <Route path="/services" element={<ServicesPage />} />
             <Route path="/system" element={<SystemPage />} />
             <Route
               path="*"
@@ -164,6 +166,7 @@ function Header({ sseDown }: { sseDown: boolean }) {
 
       <nav className="mx-auto flex h-10 max-w-page items-center gap-1 overflow-x-auto px-4 scroll-thin sm:px-6">
         <NavTab to="/" label="Apps" active={loc.pathname === '/' || loc.pathname.startsWith('/apps') || loc.pathname === '/new'} />
+        <NavTab to="/services" label="Databases" active={loc.pathname.startsWith('/services')} />
         <NavTab to="/system" label="System" active={loc.pathname.startsWith('/system')} />
       </nav>
 

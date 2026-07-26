@@ -18,6 +18,8 @@ import {
 } from '../db/repo.js';
 import type { AppRow, AppType, DeploymentRow, EnvSchema, ResolvedConfig } from '../types.js';
 import { missingRequiredKeys } from '../core/detect/envexample.js';
+import { parseVolumesJson } from '../core/configResolve.js';
+import { linksForApp } from '../core/services.js';
 import type { ContainerState } from '../core/docker.js';
 import { cancelAllForApp, enqueueDeploy } from '../core/queue.js';
 import { sweepAppResources } from '../core/cleanup.js';
@@ -71,6 +73,16 @@ const patchSchema = z.object({
   memoryLimit: z.string().regex(/^\d+[bkmg]?$/i, 'e.g. 512m or 1g').nullish(),
   gitToken: singleLine(300).nullish(),
   skipEnvCheck: z.boolean().optional(),
+  releaseCmd: singleLine(500).nullish(),
+  volumes: z
+    .array(
+      z.object({
+        name: z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, 'volume names are dns-safe slugs'),
+        path: z.string().max(200).regex(/^\/[^\s]*$/, 'mount paths are absolute'),
+      })
+    )
+    .max(10)
+    .nullish(),
 });
 
 const deploySchema = z.object({ skipEnvCheck: z.boolean().optional() });
@@ -239,6 +251,9 @@ export function appView(app: AppRow, extra: Record<string, unknown> = {}) {
     hasGitToken: !!app.git_token,
     activeDeploymentId: app.active_deployment_id,
     skipEnvCheck: app.skip_env_check === 1,
+    releaseCmd: app.release_cmd,
+    volumes: parseVolumesJson(app.volumes_json),
+    services: linksForApp(app.id).map((l) => ({ serviceId: l.service_id, name: l.service.name, type: l.service.type, envKey: l.env_key })),
     envStatus: envStatusFor(app),
     createdAt: app.created_at,
     updatedAt: app.updated_at,
@@ -368,6 +383,8 @@ export async function appRoutes(f: FastifyInstance) {
     if (d.healthPath !== undefined) patch.healthcheck_path = d.healthPath || null;
     if (d.dockerfilePath !== undefined) patch.dockerfile_path = d.dockerfilePath || null;
     if (d.rootDir !== undefined) patch.root_dir = d.rootDir || null;
+    if (d.releaseCmd !== undefined) patch.release_cmd = d.releaseCmd || null;
+    if (d.volumes !== undefined) patch.volumes_json = d.volumes?.length ? JSON.stringify(d.volumes) : null;
     if (d.memoryLimit !== undefined) patch.memory_limit = d.memoryLimit || null;
     if (d.skipEnvCheck !== undefined) patch.skip_env_check = d.skipEnvCheck ? 1 : 0;
     if (d.gitToken !== undefined) {

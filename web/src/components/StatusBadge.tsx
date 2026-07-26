@@ -13,6 +13,7 @@ const MAP: Record<string, StatusMeta> = {
   cloning: { kind: 'progress', label: 'Cloning' },
   resolving: { kind: 'progress', label: 'Resolving' },
   building: { kind: 'progress', label: 'Building' },
+  releasing: { kind: 'progress', label: 'Releasing' },
   starting: { kind: 'progress', label: 'Starting' },
   checking: { kind: 'progress', label: 'Health check' },
   deploying: { kind: 'progress', label: 'Deploying' },

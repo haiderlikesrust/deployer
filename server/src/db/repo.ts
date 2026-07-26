@@ -54,6 +54,8 @@ const APP_PATCH_COLUMNS = [
   'skip_env_check',
   'env_schema_json',
   'env_schema_detected_at',
+  'volumes_json',
+  'release_cmd',
 ] as const;
 
 export type AppPatch = Partial<Record<(typeof APP_PATCH_COLUMNS)[number], string | number | null>>;

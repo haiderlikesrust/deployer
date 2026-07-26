@@ -81,4 +81,45 @@ ALTER TABLE deployments ADD COLUMN env_schema_json TEXT;
 ALTER TABLE deployments ADD COLUMN env_missing_json TEXT;
 `,
   },
+  {
+    id: 4,
+    name: 'state_volumes_services_release',
+    // Stateful apps: named volumes, a release (migration) command, and managed
+    // database containers linked to apps via injected env vars.
+    sql: `
+ALTER TABLE apps ADD COLUMN volumes_json TEXT;
+ALTER TABLE apps ADD COLUMN release_cmd TEXT;
+
+CREATE TABLE services (
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  type       TEXT NOT NULL CHECK (type IN ('postgres','redis','mongo')),
+  version    TEXT NOT NULL,
+  password   TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE service_links (
+  id         INTEGER PRIMARY KEY,
+  service_id INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+  app_id     INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  env_key    TEXT NOT NULL,
+  UNIQUE (service_id, app_id)
+);
+`,
+  },
+  {
+    id: 5,
+    name: 'metrics',
+    // 30s samples from docker stats, pruned after 25h — enough for a day of sparklines.
+    sql: `
+CREATE TABLE metrics (
+  app_id    INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  ts        INTEGER NOT NULL,
+  cpu_pct   REAL NOT NULL,
+  mem_bytes INTEGER NOT NULL
+);
+CREATE INDEX idx_metrics_app_ts ON metrics(app_id, ts);
+`,
+  },
 ];

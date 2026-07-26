@@ -18,10 +18,12 @@ import { resolveConfig } from './configResolve.js';
 import { detectEnvSchema, missingRequiredKeys } from './detect/envexample.js';
 import { buildImage } from './builder.js';
 import { runContainer, healthGate } from './runner.js';
-import { docker, removeContainer, stopContainer, ensureNetwork } from './docker.js';
+import { docker, removeContainer, stopContainer, startContainer as dockerStart, ensureNetwork } from './docker.js';
 import { emitEvent } from './events.js';
 import { checkDiskSpace, retainImages } from './cleanup.js';
 import { notify } from './notify.js';
+import { serviceEnvForApp } from './services.js';
+import { runRelease } from './release.js';
 
 class CanceledError extends Error {
   constructor() {
@@ -72,6 +74,8 @@ export async function runDeployment(deploymentId: number): Promise<void> {
   const buildDir = paths.buildDir(app.name, dep.id);
   const srcDir = path.join(buildDir, 'src');
   let startedContainer: string | null = null;
+  /** Old container stopped early for a volume-safe swap — restart it on failure. */
+  let stoppedOldContainer: string | null = null;
   let stage: DeploymentStatus = 'cloning';
 
   try {
@@ -99,6 +103,7 @@ export async function runDeployment(deploymentId: number): Promise<void> {
     if (app.root_dir) stageLog(dep.id, `Building from subdirectory '${app.root_dir}'`);
     const { cfg, generatedDockerfile, extraContextFiles } = resolveConfig(app, getEnvVars(app.id), buildRoot, {
       previousType: activeResolvedType(app),
+      serviceEnv: serviceEnvForApp(app.id),
     });
     updateDeployment(dep.id, { config_json: JSON.stringify(cfg) });
     for (const note of cfg.notes) appendLog(dep.id, `  ${note}`);
@@ -156,8 +161,25 @@ export async function runDeployment(deploymentId: number): Promise<void> {
     });
     updateDeployment(dep.id, { image_tag: image });
 
+    // ---- releasing (migrations) ----
+    if (cfg.releaseCmd) {
+      setStage(dep, (stage = 'releasing'));
+      stageLog(dep.id, 'Running release command');
+      await runRelease(app, dep.id, cfg, image);
+    }
+
     // ---- starting ----
     setStage(dep, (stage = 'starting'));
+    // a named volume must never be attached to two app containers at once, so
+    // volume-backed apps trade the zero-downtime overlap for data safety
+    if (cfg.volumes.length > 0) {
+      const prevDep = app.active_deployment_id ? getDeployment(app.active_deployment_id) : null;
+      if (prevDep?.container_id) {
+        stageLog(dep.id, 'Stopping previous container first (persistent volumes) — brief downtime');
+        await stopContainer(prevDep.container_id);
+        stoppedOldContainer = prevDep.container_id;
+      }
+    }
     stageLog(dep.id, 'Starting container');
     startedContainer = await runContainer(app, dep.id, cfg, image);
     updateDeployment(dep.id, { container_id: startedContainer });
@@ -191,6 +213,10 @@ export async function runDeployment(deploymentId: number): Promise<void> {
     if (startedContainer) {
       await removeContainer(startedContainer).catch(() => {});
       updateDeployment(dep.id, { container_id: null });
+    }
+    if (stoppedOldContainer) {
+      stageLog(dep.id, 'Restarting the previous container');
+      await dockerStart(stoppedOldContainer).catch(() => {});
     }
     if (e instanceof NeedsEnvError) {
       // no ✗ prefix, no error string — this must not read as a crash
@@ -237,12 +263,21 @@ export async function runDeployment(deploymentId: number): Promise<void> {
 async function runRollback(dep: DeploymentRow, app: AppRow) {
   updateDeployment(dep.id, { started_at: now(), log_file: `deploy-${dep.id}.log` });
   let startedContainer: string | null = null;
+  let stoppedOldContainer: string | null = null;
   let stage: DeploymentStatus = 'starting';
 
   try {
     await ensureNetwork();
     if (!dep.image_tag || !dep.config_json) throw new Error('rollback source has no retained image or config');
     const cfg = JSON.parse(dep.config_json) as ResolvedConfig;
+    if ((cfg.volumes?.length ?? 0) > 0) {
+      const prevDep = app.active_deployment_id ? getDeployment(app.active_deployment_id) : null;
+      if (prevDep?.container_id) {
+        stageLog(dep.id, 'Stopping previous container first (persistent volumes)');
+        await stopContainer(prevDep.container_id);
+        stoppedOldContainer = prevDep.container_id;
+      }
+    }
     stageLog(dep.id, `Rolling back to image ${dep.image_tag}${dep.commit_sha ? ` (${dep.commit_sha.slice(0, 10)} — ${dep.commit_msg ?? ''})` : ''}`);
 
     const exists = await docker(['image', 'inspect', dep.image_tag]);
@@ -269,6 +304,10 @@ async function runRollback(dep: DeploymentRow, app: AppRow) {
     if (startedContainer) {
       await removeContainer(startedContainer).catch(() => {});
       updateDeployment(dep.id, { container_id: null });
+    }
+    if (stoppedOldContainer) {
+      stageLog(dep.id, 'Restarting the previous container');
+      await dockerStart(stoppedOldContainer).catch(() => {});
     }
     if (wasCanceled) {
       stageLog(dep.id, '✗ Rollback canceled');
