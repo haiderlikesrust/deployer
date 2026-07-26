@@ -50,6 +50,10 @@ export interface AppRow {
   volumes_json: string | null;
   /** Runs in a one-off container after build, before the swap (migrations). */
   release_cmd: string | null;
+  /** 1 = webhook pushes to other branches spawn preview apps. */
+  preview_branches: number;
+  /** Set on preview apps: the app they were spawned from. */
+  parent_app_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -127,7 +131,7 @@ export interface EnvSchema {
   vars: EnvVarSpec[];
 }
 
-export type Builder = 'dockerfile' | 'node' | 'node-static' | 'python' | 'static';
+export type Builder = 'dockerfile' | 'node' | 'node-static' | 'python' | 'rust' | 'go' | 'static';
 
 export type ConfigSource = 'ui' | 'yml' | 'auto';
 

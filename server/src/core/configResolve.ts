@@ -7,6 +7,8 @@ import type { AppRow, AppType, AppVolume, ConfigSource, ResolvedConfig } from '.
 import { findDockerfile, sniffExpose } from './detect/dockerfile.js';
 import { analyzeNode, nodeServerDockerfile, nodeStaticDockerfile } from './detect/node.js';
 import { analyzePython, pythonDockerfile } from './detect/python.js';
+import { analyzeRust, rustDockerfile } from './detect/rust.js';
+import { analyzeGo, goDockerfile } from './detect/go.js';
 import { hasRootIndexHtml, staticDockerfile, NGINX_CONF } from './detect/static.js';
 
 const DEPLOY_YML_KEYS = ['type', 'port', 'build', 'start', 'dockerfile', 'health', 'domain', 'env', 'release', 'volumes'] as const;
@@ -243,6 +245,38 @@ export function resolveConfig(
         if (!startCmd && py.startCmd) sources.start = 'auto';
         startCmd = finalStart;
         generatedDockerfile = pythonDockerfile({ installLines: py.installLines, buildCmd, startCmd: finalStart, port: containerPort });
+      } else if (analyzeRust(repoDir)) {
+        const rust = analyzeRust(repoDir)!;
+        notes.push(...rust.notes);
+        builder = 'rust';
+        const auto = autoTypeFrom(rust.webEvidence);
+        type = explicitType ?? auto.type;
+        if (!sources.type) sources.type = 'auto';
+        webEvidence = rust.webEvidence;
+        const port = pick('port', app.port, yml.port ?? null, 3000);
+        containerPort = port!;
+        autoTypeReason = rust.webEvidence
+          ? `${rust.webEvidence} — running as a web app on port ${containerPort}`
+          : auto.fromHistory
+            ? HISTORY_REASON
+            : WORKER_REASON;
+        generatedDockerfile = rustDockerfile({ binName: rust.binName, port: containerPort });
+      } else if (analyzeGo(repoDir)) {
+        const go = analyzeGo(repoDir)!;
+        notes.push(...go.notes);
+        builder = 'go';
+        const auto = autoTypeFrom(go.webEvidence);
+        type = explicitType ?? auto.type;
+        if (!sources.type) sources.type = 'auto';
+        webEvidence = go.webEvidence;
+        const port = pick('port', app.port, yml.port ?? null, 3000);
+        containerPort = port!;
+        autoTypeReason = go.webEvidence
+          ? `${go.webEvidence} — running as a web app on port ${containerPort}`
+          : auto.fromHistory
+            ? HISTORY_REASON
+            : WORKER_REASON;
+        generatedDockerfile = goDockerfile({ hasGoSum: go.hasGoSum, port: containerPort });
       } else if (hasRootIndexHtml(repoDir)) {
         builder = 'static';
         type = explicitType ?? 'static';
@@ -254,7 +288,7 @@ export function resolveConfig(
         notes.push('index.html found at repo root — serving as a static site with nginx');
       } else {
         throw new Error(
-          'could not detect how to build this repo: no Dockerfile, no package.json, no requirements.txt/pyproject.toml, no index.html. ' +
+          'could not detect how to build this repo: no Dockerfile, no package.json, no requirements.txt/pyproject.toml, no Cargo.toml, no go.mod, no index.html. ' +
             'Commit a Dockerfile to deploy any other stack.'
         );
       }

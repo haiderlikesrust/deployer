@@ -19,6 +19,7 @@ import { sseRoutes } from './api/sse.js';
 import { healthRoutes } from './api/health.js';
 import { webhookRoutes } from './api/webhooks.js';
 import { serviceRoutes } from './api/services.js';
+import { tokenRoutes } from './api/tokens.js';
 import { startCrashWatcher } from './core/notify.js';
 import { reconcileServices, startBackupSchedule } from './core/services.js';
 import { startObservers } from './core/observe.js';
@@ -63,6 +64,7 @@ async function main() {
   await f.register(sseRoutes, { prefix: '/api' });
   await f.register(webhookRoutes, { prefix: '/api' });
   await f.register(serviceRoutes, { prefix: '/api' });
+  await f.register(tokenRoutes, { prefix: '/api' });
 
   // --- built dashboard (same origin — no CORS, cookie auth just works) ---
   const webDist = process.env.WEB_DIST ?? path.resolve(import.meta.dirname, '../../web/dist');

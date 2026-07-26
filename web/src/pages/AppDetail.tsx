@@ -1523,6 +1523,31 @@ function SettingsTab({ app, onDeleted }: { app: App; onDeleted: () => void }) {
 
       <WebhookCard app={app} />
 
+      {!app.parentAppId && (
+        <Card padding="md">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-3.5 w-3.5 accent-white"
+              checked={!!app.previewBranches}
+              onChange={(e) =>
+                Api.apps.patch(app.id, { previewBranches: e.target.checked }).then(() => {
+                  qc.invalidateQueries({ queryKey: ['app', app.id] });
+                  toast({ title: e.target.checked ? 'Preview deploys enabled' : 'Preview deploys disabled', variant: 'success' });
+                })
+              }
+            />
+            <span className="min-w-0">
+              <span className="text-sm font-medium text-fg">Preview deploys for other branches</span>
+              <span className="mt-0.5 block text-xs text-fg-subtle">
+                A push to any other branch spawns <span className="font-mono">{app.name}-&lt;branch&gt;</span> with this app's settings and env.
+                Volumes and databases are never shared. Deleting the branch removes the preview.
+              </span>
+            </span>
+          </label>
+        </Card>
+      )}
+
       <Card tone="danger" padding="md">
         <h3 className="text-sm font-medium text-danger-fg">Danger zone</h3>
         <p className="mt-1 text-xs text-fg-subtle">

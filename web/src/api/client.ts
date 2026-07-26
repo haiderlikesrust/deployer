@@ -202,6 +202,8 @@ export interface App {
   services?: LinkedService[];
   /** null = not probed; false = container up but the app is not answering */
   httpUp?: boolean | null;
+  previewBranches?: boolean;
+  parentAppId?: number | null;
 }
 
 export interface EnvSchemaResponse {
@@ -335,6 +337,8 @@ export const Api = {
       req<{ range: number; points: { ts: number; cpuPct: number; memBytes: number }[] }>(`/apps/${id}/metrics?range=${range}`),
     logsHistory: (id: number, q: string, limit = 300) =>
       req<{ lines: string[]; scannedBytes: number }>(`/apps/${id}/logs/history?q=${encodeURIComponent(q)}&limit=${limit}`),
+    exec: (id: number, cmd: string) =>
+      req<{ code: number; output: string; timedOut: boolean }>(`/apps/${id}/exec`, { method: 'POST', body: JSON.stringify({ cmd }) }),
     action: (id: number, action: 'start' | 'stop' | 'restart') => req<{ ok: boolean }>(`/apps/${id}/${action}`, { method: 'POST' }),
   },
 
@@ -363,6 +367,12 @@ export const Api = {
       notifyEvents?: Partial<NotifyEvents>;
     }) => req<{ ok: boolean }>('/settings', { method: 'PUT', body: JSON.stringify(patch) }),
     notifyTest: () => req<{ ok: boolean; errors: string[] }>('/settings/notify-test', { method: 'POST' }),
+  },
+
+  tokens: {
+    list: () => req<{ id: number; name: string; createdAt: string; lastUsedAt: string | null }[]>('/tokens'),
+    create: (name: string) => req<{ token: string; name: string }>('/tokens', { method: 'POST', body: JSON.stringify({ name }) }),
+    remove: (id: number) => req<void>(`/tokens/${id}`, { method: 'DELETE' }),
   },
 
   services: {

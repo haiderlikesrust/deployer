@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { getSetting } from '../db/db.js';
+import { bearerTokenValid } from './tokens.js';
 
 export const SESSION_COOKIE = 'dep_session';
 const SESSION_MAX_AGE_S = 30 * 24 * 3600;
@@ -39,9 +40,10 @@ export async function authGate(req: FastifyRequest, reply: FastifyReply) {
   const url = req.url.split('?')[0];
   if (!url.startsWith('/api/')) return; // SPA assets
   if (PUBLIC_PREFIXES.some((p) => url.startsWith(p))) return;
-  if (!isAuthed(req)) {
-    reply.code(401).send({ error: 'unauthorized' });
-  }
+  if (isAuthed(req)) return;
+  // CLI/CI path: Authorization: Bearer dpl_...
+  if (bearerTokenValid(req)) return;
+  reply.code(401).send({ error: 'unauthorized' });
 }
 
 // naive per-IP limiter — one admin user, this only needs to stop dumb brute force

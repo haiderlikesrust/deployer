@@ -13,6 +13,7 @@ import {
   Input,
   KeyValue,
   PageHeader,
+  RelativeTime,
   Server,
   SkeletonText,
   StatCard,
@@ -191,7 +192,92 @@ export default function SystemPage() {
       </Card>
 
       <NotificationsCard />
+      <TokensCard />
     </div>
+  );
+}
+
+function TokensCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const tokens = useQuery({ queryKey: ['tokens'], queryFn: Api.tokens.list });
+  const [name, setName] = useState('');
+  const [fresh, setFresh] = useState<string | null>(null);
+
+  const create = useMutation({
+    mutationFn: () => Api.tokens.create(name.trim()),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ['tokens'] });
+      setName('');
+      setFresh(r.token);
+    },
+    onError: (e) => toast({ title: 'Could not create token', description: (e as Error).message, variant: 'error' }),
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => Api.tokens.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tokens'] });
+      toast({ title: 'Token revoked', variant: 'info' });
+    },
+  });
+
+  return (
+    <Card padding="none">
+      <CardHeader>
+        <CardTitle>API tokens</CardTitle>
+        <p className="mt-0.5 text-xs text-fg-subtle">
+          For the CLI and CI. Same access as this dashboard — treat them like passwords.
+        </p>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        {fresh && (
+          <div className="rounded-md border border-success-br bg-success-bg p-3">
+            <div className="text-xs font-medium text-success-fg">Copy this now — it is never shown again</div>
+            <div className="mt-2 flex min-w-0 items-center gap-2">
+              <code className="min-w-0 flex-1 truncate font-mono text-xs text-fg">{fresh}</code>
+              <CopyButton value={fresh} title="Copy token" />
+              <Button variant="ghost" size="sm" onClick={() => setFresh(null)}>
+                Done
+              </Button>
+            </div>
+            <pre className="mt-3 overflow-x-auto rounded bg-black/40 p-2 font-mono text-2xs text-fg-muted">
+              node cli/deployer.mjs login {location.origin} {fresh}
+            </pre>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <Input aria-label="Token name" value={name} onChange={(e) => setName(e.target.value)} placeholder="laptop, ci, …" className="max-w-64" />
+          <Button loading={create.isPending} disabled={!name.trim()} onClick={() => create.mutate()}>
+            Create token
+          </Button>
+        </div>
+
+        {(tokens.data?.length ?? 0) > 0 && (
+          <ul className="divide-y divide-border-subtle">
+            {tokens.data!.map((t) => (
+              <li key={t.id} className="flex items-center gap-3 py-2 text-xs">
+                <span className="font-medium text-fg">{t.name}</span>
+                <span className="text-fg-faint">
+                  created <RelativeTime iso={t.createdAt} />
+                  {t.lastUsedAt ? (
+                    <>
+                      {' · last used '}
+                      <RelativeTime iso={t.lastUsedAt} />
+                    </>
+                  ) : (
+                    ' · never used'
+                  )}
+                </span>
+                <Button variant="ghost" size="sm" className="ml-auto" onClick={() => remove.mutate(t.id)}>
+                  Revoke
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 

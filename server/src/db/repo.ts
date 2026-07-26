@@ -56,6 +56,8 @@ const APP_PATCH_COLUMNS = [
   'env_schema_detected_at',
   'volumes_json',
   'release_cmd',
+  'preview_branches',
+  'parent_app_id',
 ] as const;
 
 export type AppPatch = Partial<Record<(typeof APP_PATCH_COLUMNS)[number], string | number | null>>;

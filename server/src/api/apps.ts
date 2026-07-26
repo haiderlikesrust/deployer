@@ -75,6 +75,7 @@ const patchSchema = z.object({
   memoryLimit: z.string().regex(/^\d+[bkmg]?$/i, 'e.g. 512m or 1g').nullish(),
   gitToken: singleLine(300).nullish(),
   skipEnvCheck: z.boolean().optional(),
+  previewBranches: z.boolean().optional(),
   releaseCmd: singleLine(500).nullish(),
   volumes: z
     .array(
@@ -254,6 +255,8 @@ export function appView(app: AppRow, extra: Record<string, unknown> = {}) {
     activeDeploymentId: app.active_deployment_id,
     skipEnvCheck: app.skip_env_check === 1,
     releaseCmd: app.release_cmd,
+    previewBranches: app.preview_branches === 1,
+    parentAppId: app.parent_app_id,
     volumes: parseVolumesJson(app.volumes_json),
     /** null = not probed (no active container); false = container up but app not answering */
     httpUp: reachabilityFor(app.id),
@@ -415,6 +418,7 @@ export async function appRoutes(f: FastifyInstance) {
     if (d.dockerfilePath !== undefined) patch.dockerfile_path = d.dockerfilePath || null;
     if (d.rootDir !== undefined) patch.root_dir = d.rootDir || null;
     if (d.releaseCmd !== undefined) patch.release_cmd = d.releaseCmd || null;
+    if (d.previewBranches !== undefined) patch.preview_branches = d.previewBranches ? 1 : 0;
     if (d.volumes !== undefined) patch.volumes_json = d.volumes?.length ? JSON.stringify(d.volumes) : null;
     if (d.memoryLimit !== undefined) patch.memory_limit = d.memoryLimit || null;
     if (d.skipEnvCheck !== undefined) patch.skip_env_check = d.skipEnvCheck ? 1 : 0;

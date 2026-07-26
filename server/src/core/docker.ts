@@ -141,6 +141,13 @@ export async function ensureNetwork(): Promise<void> {
   }
 }
 
+/** One-off `sh -c` inside a running container, output scrubbed and bounded. */
+export async function execInContainer(container: string, cmd: string): Promise<{ code: number; output: string; timedOut: boolean }> {
+  const res = await docker(['exec', container, 'sh', '-c', cmd], { timeoutMs: 60_000 });
+  const { scrub } = await import('./secrets.js');
+  return { code: res.code, output: scrub((res.stdout + res.stderr).trim()), timedOut: res.timedOut };
+}
+
 export async function dockerInfo(): Promise<{ version: string; ok: boolean; error?: string }> {
   const res = await docker(['version', '--format', '{{.Server.Version}}']);
   if (res.code !== 0) return { version: '', ok: false, error: res.stderr.trim() };

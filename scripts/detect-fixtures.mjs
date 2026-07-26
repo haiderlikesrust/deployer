@@ -172,6 +172,41 @@ check('concrete default is optional', String(spec('DATABASE_URL')?.required), 'f
 check('PORT is never required', String(spec('PORT')?.required), 'false');
 check('description from preceding comment', spec('STRIPE_KEY')?.description ?? 'null', 'Stripe secret key');
 
+
+console.log('\nRust / Go:');
+const { analyzeRust, rustDockerfile } = await load('core/detect/rust.ts');
+const { analyzeGo } = await load('core/detect/go.ts');
+
+const rustWeb = repo('r-axum', {
+  'Cargo.toml': '[package]\nname = "my-api"\nversion = "0.1.0"\n\n[dependencies]\naxum = "0.7"\n',
+  'src/main.rs': 'fn main() {}',
+});
+check('rust axum -> web', analyzeRust(rustWeb).webEvidence ? 'web' : 'worker', 'web');
+
+const rustBot = repo('r-bot', {
+  'Cargo.toml': '[package]\nname = "trader"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\n',
+  'src/main.rs': 'fn main() { loop {} }',
+});
+check('rust cli/bot -> worker', analyzeRust(rustBot).webEvidence ? 'web' : 'worker', 'worker');
+check('rust binary name from Cargo.toml', analyzeRust(rustBot).binName, 'trader');
+check(
+  'rust dockerfile copies that binary',
+  rustDockerfile({ binName: 'trader', port: 3000 }).includes('/app/target/release/trader') ? 'yes' : 'no',
+  'yes'
+);
+
+const goWeb = repo('g-gin', {
+  'go.mod': 'module x\n\nrequire github.com/gin-gonic/gin v1.9.1\n',
+  'main.go': 'package main',
+});
+check('go gin -> web', analyzeGo(goWeb).webEvidence ? 'web' : 'worker', 'web');
+
+const goBot = repo('g-worker', {
+  'go.mod': 'module x\n',
+  'main.go': 'package main\nfunc main() { for {} }',
+});
+check('go worker -> worker', analyzeGo(goBot).webEvidence ? 'web' : 'worker', 'worker');
+
 fs.rmSync(WORK, { recursive: true, force: true });
 
 console.log(`\n${pass}/${pass + failures.length} checks passed`);

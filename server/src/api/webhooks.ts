@@ -1,7 +1,11 @@
 import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { getApp } from '../db/repo.js';
-import { enqueueDeploy } from '../core/queue.js';
+import { createApp, deleteApp, getApp, getAppByName, getEnvVars, listApps, listDeployments, replaceEnvVars, updateApp } from '../db/repo.js';
+import { cancelAllForApp, enqueueDeploy } from '../core/queue.js';
+import { sweepAppResources } from '../core/cleanup.js';
+import { deleteLogFile } from '../core/buildlogs.js';
+import { deleteAppLogs } from '../core/observe.js';
+import type { AppRow } from '../types.js';
 
 /**
  * Push-to-deploy. These routes are unauthenticated by design (authGate skips
@@ -27,7 +31,7 @@ export async function webhookRoutes(f: FastifyInstance) {
 
     const event = req.headers['x-github-event'];
     if (event === 'ping') return { ok: true, pong: true };
-    if (event !== 'push') return { ok: true, ignored: `event ${String(event)}` };
+    if (event !== 'push' && event !== 'delete') return { ok: true, ignored: `event ${String(event)}` };
 
     let payload: any;
     try {
@@ -40,14 +44,30 @@ export async function webhookRoutes(f: FastifyInstance) {
       return reply.code(400).send({ error: 'unparseable payload' });
     }
 
+    // branch deletion (as a delete event or a push with deleted:true) retires its preview app
+    if (event === 'delete') {
+      if (payload.ref_type !== 'branch') return { ok: true, ignored: 'not a branch deletion' };
+      await removePreviewApp(app, String(payload.ref ?? ''));
+      return { ok: true, previewRemoved: true };
+    }
+
     const ref: string = payload.ref ?? '';
     if (!ref.startsWith('refs/heads/')) return { ok: true, ignored: 'not a branch push' };
-    if (payload.deleted) return { ok: true, ignored: 'branch deletion' };
-
     const pushedBranch = ref.slice('refs/heads/'.length);
+    if (payload.deleted) {
+      await removePreviewApp(app, pushedBranch);
+      return { ok: true, ignored: 'branch deletion' };
+    }
+
     const targetBranch = app.branch || payload.repository?.default_branch || 'main';
     if (pushedBranch !== targetBranch) {
-      return { ok: true, ignored: `push to ${pushedBranch} — this app deploys ${targetBranch}` };
+      if (app.preview_branches !== 1) {
+        return { ok: true, ignored: `push to ${pushedBranch} — this app deploys ${targetBranch}` };
+      }
+      const preview = ensurePreviewApp(app, pushedBranch);
+      if (!preview) return { ok: true, ignored: `could not create a preview app for ${pushedBranch}` };
+      const dep = enqueueDeploy(preview.id, 'webhook');
+      return { ok: true, preview: preview.name, deploymentId: dep.id };
     }
 
     const dep = enqueueDeploy(app.id, 'webhook');
@@ -63,6 +83,66 @@ export async function webhookRoutes(f: FastifyInstance) {
     const dep = enqueueDeploy(app.id, 'webhook');
     return { ok: true, deploymentId: dep.id };
   });
+}
+
+function previewName(app: AppRow, branch: string): string | null {
+  const slug = branch
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 12);
+  if (!slug) return null;
+  const name = `${app.name}-${slug}`.slice(0, 31).replace(/-+$/, '');
+  return name;
+}
+
+/**
+ * Preview apps: same repo and settings, different branch, own subdomain.
+ * Env vars are copied at creation time; volumes and service links deliberately
+ * are NOT — previews must never touch production data.
+ */
+function ensurePreviewApp(parent: AppRow, branch: string): AppRow | null {
+  const name = previewName(parent, branch);
+  if (!name) return null;
+  const existing = getAppByName(name);
+  if (existing) return existing.parent_app_id === parent.id ? existing : null;
+
+  const preview = createApp({
+    name,
+    repo_url: parent.repo_url,
+    branch,
+    type: parent.type,
+    domain: null, // previews always live on <name>.<base-domain>
+    port: parent.port,
+    root_dir: parent.root_dir,
+    git_token: parent.git_token,
+  });
+  updateApp(preview.id, {
+    parent_app_id: parent.id,
+    build_cmd: parent.build_cmd,
+    start_cmd: parent.start_cmd,
+    healthcheck_path: parent.healthcheck_path,
+    dockerfile_path: parent.dockerfile_path,
+    release_cmd: parent.release_cmd,
+    skip_env_check: parent.skip_env_check,
+    webhook_secret: crypto.randomBytes(24).toString('hex'),
+  });
+  replaceEnvVars(preview.id, getEnvVars(parent.id).map((v) => ({ key: v.key, value: v.value })));
+  return getAppByName(name);
+}
+
+async function removePreviewApp(parent: AppRow, branch: string) {
+  const name = previewName(parent, branch);
+  if (!name) return;
+  const preview = getAppByName(name);
+  // only ever delete something this parent created — never a real app that happens to match
+  if (!preview || preview.parent_app_id !== parent.id) return;
+  cancelAllForApp(preview.id);
+  const deployments = listDeployments(preview.id, 1000);
+  await sweepAppResources(preview.name);
+  for (const d of deployments) deleteLogFile(d.id);
+  deleteAppLogs(preview.name);
+  deleteApp(preview.id);
 }
 
 function verifyGithubSignature(raw: Buffer, secret: string, header: string): boolean {
