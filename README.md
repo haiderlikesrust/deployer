@@ -19,6 +19,8 @@ repo URL ──> clone ──> detect/build image ──> run container ──> 
    - `package.json` with a `start` script → Node server (`node:22-slim`, `PORT` injected)
    - `package.json` with only a `build` script / Vite / CRA → static frontend (build → nginx)
    - `requirements.txt` / `pyproject.toml` → Python (uvicorn/gunicorn guessed)
+   - `Cargo.toml` → Rust (multi-stage release build, binary on debian-slim)
+   - `go.mod` → Go (static binary on alpine)
    - bare `index.html` → static site (nginx)
 3. **Not everything is a website.** After the static check, an app is only a
    `web` app if there is real evidence it serves HTTP — a web-framework
@@ -97,6 +99,24 @@ curl -fsSL https://raw.githubusercontent.com/haiderlikesrust/deployer/main/insta
   Let's Encrypt rate limits while testing, then re-run with `letsencrypt`.
 
 ## Features
+
+**Deploy workflow** — push-to-deploy via GitHub webhooks (HMAC-verified) or a
+plain `curl`; one-click rollback that re-runs a retained image with its
+snapshotted config; Telegram/Discord notifications for deploys, failures,
+missing env vars and crash-loops.
+
+**Stateful apps** — persistent named volumes, one-click Postgres/Redis/MongoDB
+with connection URLs injected into linked apps, daily backups (kept 7), and a
+`release:` command for migrations that gates the swap.
+
+**Observability** — runtime logs collected to rotated files and searchable long
+after the container is gone, CPU/memory sparklines, and a reachability probe
+that alerts when a container is up but the app inside is wedged.
+
+**Power tools** — API tokens + a dependency-free CLI (`deployer deploy`,
+`logs -f`, `env set`, `exec`, `rollback`), one-off commands in the running
+container, and opt-in preview deploys per branch.
+
 
 - **Deploy queue** with live-streamed build logs (SSE), deployment history,
   cancel, and per-deployment resolved-config panel

@@ -26,6 +26,10 @@
       <a href="#domains">Domains &amp; HTTPS</a>
       <a href="#private">Private repos</a>
       <a href="#monorepo">Monorepos</a>
+      <a href="#webhooks">Push to deploy</a>
+      <a href="#databases">Databases &amp; data</a>
+      <a href="#observability">Monitoring &amp; alerts</a>
+      <a href="#cli">CLI &amp; API tokens</a>
       <a href="#deploys">Deploys &amp; rollback safety</a>
       <a href="#ops">Operations</a>
       <a href="#troubleshooting">Troubleshooting</a>
@@ -449,10 +453,90 @@ LOG_LEVEL=info          # optional
         </p>
       </section>
 
+      <section id="webhooks">
+        <h2>Push to deploy</h2>
+        <p>
+          Every app exposes a GitHub webhook and a plain POST URL, both on its <b>Settings</b> tab. Add the payload URL and
+          secret to <em>Repo → Settings → Webhooks</em> (content type <code>application/json</code>, event <code>push</code>)
+          and every push to the app's branch deploys itself. Pushes to other branches are ignored — unless preview deploys are on.
+        </p>
+        <p>
+          The generic URL (<code>/api/hooks/deploy/&lt;id&gt;/&lt;secret&gt;</code>) needs nothing but the ability to send a POST,
+          so CI, cron or another machine can trigger a deploy with one <code>curl -X POST</code>.
+        </p>
+        <h3>Preview deploys</h3>
+        <p>
+          Turn on <b>Preview deploys</b> and a push to any other branch spawns <code>&lt;app&gt;-&lt;branch&gt;</code> on its own
+          subdomain, inheriting the parent's settings and environment variables — but never its volumes or database links, so a
+          preview can't corrupt production data. Deleting the branch removes the preview app and its resources.
+        </p>
+      </section>
+
+      <section id="databases">
+        <h2>Databases &amp; persistent data</h2>
+        <p>
+          The <b>Databases</b> page creates managed PostgreSQL, Redis or MongoDB containers. They live on the private Docker
+          network with no published host port, so nothing on the internet can reach them. Link one to an app and its connection
+          URL is injected as an environment variable (<code>DATABASE_URL</code>, <code>REDIS_URL</code>, <code>MONGO_URL</code> by
+          default) on the next deploy. Backups run daily, keep the last 7, and can be triggered or downloaded on demand.
+        </p>
+        <h3>Volumes</h3>
+        <p>
+          Apps that write files need a <b>volume</b> — a named store that survives deploys — configured in app settings or in
+          <code>deploy.yml</code>:
+        </p>
+        <pre><code>volumes:
+  data: /app/data
+  uploads: /var/uploads</code></pre>
+        <div class="callout">
+          Apps with volumes deploy <b>stop-then-start</b> instead of overlapping, because two containers must never write the same
+          volume at once. That means a few seconds of downtime per deploy — the trade is deliberate, and the previous container is
+          restarted automatically if the new one fails.
+        </div>
+        <h3>Release commands</h3>
+        <p>
+          A <code>release:</code> command (settings or <code>deploy.yml</code>) runs in a one-off container from the freshly built
+          image, after the build and before any traffic moves — the right place for migrations. A non-zero exit stops the deploy
+          with the current version still serving.
+        </p>
+        <pre><code>release: "npx prisma migrate deploy"</code></pre>
+      </section>
+
+      <section id="observability">
+        <h2>Monitoring &amp; alerts</h2>
+        <ul>
+          <li><b>Log history</b> — runtime output is collected to rotated files as it happens, so the <em>History</em> tab can search logs from containers that no longer exist.</li>
+          <li><b>Metrics</b> — CPU and memory are sampled every 30 seconds and drawn as sparklines on the app header (kept for 25 hours).</li>
+          <li><b>Reachability</b> — every app is probed each minute; three consecutive failures raise a warning banner and a notification. This catches the nasty case where the container is running but the app inside is wedged.</li>
+          <li><b>Crash alerts</b> — restarts are watched, so a crash-looping bot pings you instead of hiding behind a green badge.</li>
+        </ul>
+        <p>
+          Configure Telegram (bot token + chat id) or a Discord webhook under <b>System → Notifications</b>, choose which events
+          you care about, and send a test message.
+        </p>
+      </section>
+
+      <section id="cli">
+        <h2>CLI &amp; API tokens</h2>
+        <p>Create a token under <b>System → API tokens</b>, then drive everything from your terminal:</p>
+        <pre><code>deployer login https://deploy.yourdomain.com dpl_xxx
+deployer ls
+deployer deploy            # app name defaults to the current directory
+deployer logs -f
+deployer env set API_KEY=secret
+deployer exec "npm run migrate"
+deployer rollback</code></pre>
+        <p>
+          The CLI is a single dependency-free file (<code>cli/deployer.mjs</code>). Tokens authenticate as
+          <code>Authorization: Bearer dpl_…</code>, are stored only as a SHA-256 hash, and can be revoked at any time. Treat them
+          like passwords — they carry the same access as the dashboard.
+        </p>
+      </section>
+
       <section id="deploys">
         <h2>Deploys &amp; rollback safety</h2>
         <p>Each deployment moves through visible stages:</p>
-        <p class="pipeline"><code>queued</code> → <code>cloning</code> → <code>resolving</code> → <code>building</code> → <code>starting</code> → <code>checking</code> → <code>live</code></p>
+        <p class="pipeline"><code>queued</code> → <code>cloning</code> → <code>resolving</code> → <code>building</code> → <code>releasing</code> → <code>starting</code> → <code>checking</code> → <code>live</code></p>
         <ul>
           <li>A deploy can also end at <code>needs_env</code> during <code>resolving</code> — required variables are missing, so nothing is built. See <a href="#env-example">.env.example</a>.</li>
           <li>Builds run <b>one at a time</b>, so a small VPS is never crushed by two builds at once.</li>
