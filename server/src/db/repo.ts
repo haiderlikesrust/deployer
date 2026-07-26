@@ -99,10 +99,25 @@ export function replaceEnvVars(appId: number, vars: { key: string; value: string
 
 // ---------- deployments ----------
 
-export function createDeployment(appId: number, trigger: 'manual' | 'webhook'): DeploymentRow {
+export function createDeployment(appId: number, trigger: DeploymentRow['trigger']): DeploymentRow {
   const res = getDb()
     .prepare(`INSERT INTO deployments (app_id, status, trigger, created_at) VALUES (?, 'queued', ?, ?)`)
     .run(appId, trigger, now());
+  return getDeployment(Number(res.lastInsertRowid))!;
+}
+
+/**
+ * Rollback rows are born with the source deployment's image and resolved
+ * config: the pipeline skips clone/resolve/build entirely and re-runs exactly
+ * what shipped before — including its env snapshot.
+ */
+export function createRollbackDeployment(appId: number, source: DeploymentRow): DeploymentRow {
+  const res = getDb()
+    .prepare(
+      `INSERT INTO deployments (app_id, status, trigger, commit_sha, commit_msg, config_json, image_tag, created_at)
+       VALUES (?, 'queued', 'rollback', ?, ?, ?, ?, ?)`
+    )
+    .run(appId, source.commit_sha, source.commit_msg, source.config_json, source.image_tag, now());
   return getDeployment(Number(res.lastInsertRowid))!;
 }
 

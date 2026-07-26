@@ -453,7 +453,13 @@ function DeploymentsTab({ app, deploy }: { app: App; deploy: DeployHandle }) {
 
       <div className="min-w-0">
         {selectedId ? (
-          <DeploymentPane key={selectedId} deploymentId={selectedId} deploy={deploy} />
+          <DeploymentPane
+            key={selectedId}
+            deploymentId={selectedId}
+            deploy={deploy}
+            activeDeploymentId={app.activeDeploymentId}
+            onRollback={(newId) => setParams({ tab: 'deployments', dep: String(newId) }, { replace: true })}
+          />
         ) : (
           !deployments.isPending && <p className="text-sm text-fg-subtle">Select a deployment to see its output.</p>
         )}
@@ -462,7 +468,17 @@ function DeploymentsTab({ app, deploy }: { app: App; deploy: DeployHandle }) {
   );
 }
 
-function DeploymentPane({ deploymentId, deploy }: { deploymentId: number; deploy: DeployHandle }) {
+function DeploymentPane({
+  deploymentId,
+  deploy,
+  activeDeploymentId,
+  onRollback,
+}: {
+  deploymentId: number;
+  deploy: DeployHandle;
+  activeDeploymentId: number | null;
+  onRollback: (newDeploymentId: number) => void;
+}) {
   const qc = useQueryClient();
   const toast = useToast();
   const dep = useQuery({ queryKey: ['deployment', deploymentId], queryFn: () => Api.deployments.get(deploymentId) });
@@ -497,9 +513,21 @@ function DeploymentPane({ deploymentId, deploy }: { deploymentId: number; deploy
     onError: (e) => toast({ title: 'Could not cancel', description: (e as Error).message, variant: 'error' }),
   });
 
+  const [confirmRollback, setConfirmRollback] = useState(false);
+  const rollback = useMutation({
+    mutationFn: () => Api.deployments.rollback(deploymentId),
+    onSuccess: ({ deploymentId: newId }) => {
+      qc.invalidateQueries({ queryKey: ['deployments'] });
+      toast({ title: 'Rollback queued', description: 'Re-running the retained image — no rebuild needed.', variant: 'success' });
+      onRollback(newId);
+    },
+    onError: (e) => toast({ title: 'Could not roll back', description: (e as Error).message, variant: 'error' }),
+  });
+
   const d = dep.data;
   const needsEnv = d?.status === 'needs_env';
   const missing = useMemo(() => (needsEnv ? detectRequiredEnv(d) : []), [needsEnv, d]);
+  const canRollback = !!d?.imageTag && !inFlight && !needsEnv && deploymentId !== activeDeploymentId;
 
   return (
     <div className="min-w-0">
@@ -522,6 +550,12 @@ function DeploymentPane({ deploymentId, deploy }: { deploymentId: number; deploy
               Resolved config
             </Button>
           )}
+          {canRollback && (
+            <Button variant="ghost" size="sm" loading={rollback.isPending} onClick={() => setConfirmRollback(true)}>
+              <Restart className="h-3.5 w-3.5" />
+              Rollback
+            </Button>
+          )}
           {inFlight && (
             <Button variant="danger" size="sm" loading={cancel.isPending} onClick={() => cancel.mutate()}>
               Cancel
@@ -529,6 +563,18 @@ function DeploymentPane({ deploymentId, deploy }: { deploymentId: number; deploy
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmRollback}
+        title={`Roll back to deployment #${deploymentId}?`}
+        body={`Traffic switches to the retained image ${d?.imageTag ?? ''} after it passes its health check — the current version keeps serving until then. No rebuild happens.`}
+        confirmLabel="Roll back"
+        onConfirm={() => {
+          setConfirmRollback(false);
+          rollback.mutate();
+        }}
+        onCancel={() => setConfirmRollback(false)}
+      />
 
       {needsEnv && (
         <Card tone="info" padding="md" className="mb-3">
@@ -1319,6 +1365,8 @@ function SettingsTab({ app, onDeleted }: { app: App; onDeleted: () => void }) {
         </CardBody>
       </Card>
 
+      <WebhookCard app={app} />
+
       <Card tone="danger" padding="md">
         <h3 className="text-sm font-medium text-danger-fg">Danger zone</h3>
         <p className="mt-1 text-xs text-fg-subtle">
@@ -1360,5 +1408,75 @@ function SettingsTab({ app, onDeleted }: { app: App; onDeleted: () => void }) {
         onCancel={() => setConfirmDelete(false)}
       />
     </div>
+  );
+}
+
+function WebhookCard({ app }: { app: App }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [revealed, setRevealed] = useState(false);
+  const regenerate = useMutation({
+    mutationFn: () => Api.apps.regenerateWebhook(app.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['app', app.id] });
+      toast({ title: 'Webhook secret regenerated', description: 'Update it in your GitHub webhook settings.', variant: 'success' });
+    },
+    onError: (e) => toast({ title: 'Could not regenerate', description: (e as Error).message, variant: 'error' }),
+  });
+
+  const wh = app.webhook;
+  if (!wh) return null;
+
+  return (
+    <Card padding="none">
+      <CardHeader>
+        <CardTitle>Push to deploy</CardTitle>
+        <CardDescription>Every push to {app.branch || 'the default branch'} deploys automatically.</CardDescription>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <div>
+          <SectionLabel>GitHub webhook</SectionLabel>
+          <p className="mt-1 text-xs text-fg-subtle">
+            Repo → Settings → Webhooks → Add webhook. Content type <span className="font-mono text-fg-muted">application/json</span>, event{' '}
+            <span className="font-mono text-fg-muted">push</span>.
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-[5rem_1fr]">
+            <span className="text-xs text-fg-faint sm:pt-1.5">Payload URL</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <Chip mono size="sm" className="min-w-0 truncate" title={wh.githubUrl}>
+                {wh.githubUrl}
+              </Chip>
+              <CopyButton value={wh.githubUrl} title="Copy payload URL" />
+            </span>
+            <span className="text-xs text-fg-faint sm:pt-1.5">Secret</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <Chip mono size="sm" className="min-w-0 truncate">
+                {revealed ? wh.secret : '••••••••••••••••'}
+              </Chip>
+              <Button variant="ghost" size="sm" onClick={() => setRevealed((v) => !v)}>
+                {revealed ? 'Hide' : 'Reveal'}
+              </Button>
+              <CopyButton value={wh.secret} title="Copy secret" />
+            </span>
+          </div>
+        </div>
+        <div>
+          <SectionLabel>Anything else (CI, cron, curl)</SectionLabel>
+          <p className="mt-1 text-xs text-fg-subtle">A plain POST to this URL triggers a deploy — the secret is in the path.</p>
+          <span className="mt-2 flex min-w-0 items-center gap-1.5">
+            <Chip mono size="sm" className="min-w-0 truncate" title={revealed ? wh.genericUrl : undefined}>
+              {revealed ? wh.genericUrl : wh.genericUrl.replace(wh.secret, '••••••••')}
+            </Chip>
+            <CopyButton value={wh.genericUrl} title="Copy deploy URL" />
+          </span>
+        </div>
+      </CardBody>
+      <CardFooter>
+        <p className="text-xs text-fg-faint">Regenerating invalidates the old secret everywhere.</p>
+        <Button variant="ghost" size="sm" loading={regenerate.isPending} onClick={() => regenerate.mutate()} className="ml-auto">
+          Regenerate secret
+        </Button>
+      </CardFooter>
+    </Card>
   );
 }

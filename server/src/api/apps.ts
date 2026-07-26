@@ -1,6 +1,7 @@
+import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { appHost, appUrl } from '../config.js';
+import { appHost, appUrl, config } from '../config.js';
 import {
   createApp,
   deleteApp,
@@ -171,6 +172,21 @@ function envStatusFor(app: AppRow): EnvStatus | null {
   };
 }
 
+function newWebhookSecret(): string {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+/** Push-to-deploy endpoints for this app — shown on the settings tab. */
+function webhookInfo(app: AppRow) {
+  if (!app.webhook_secret) return null;
+  const base = `${config.publicScheme}://deploy.${config.baseDomain}/api/hooks`;
+  return {
+    secret: app.webhook_secret,
+    githubUrl: `${base}/github/${app.id}`,
+    genericUrl: `${base}/deploy/${app.id}/${app.webhook_secret}`,
+  };
+}
+
 /** Effective type: explicit setting, else what the last resolve decided. */
 function effectiveAppType(app: AppRow): AppType | null {
   if (app.type) return app.type;
@@ -293,14 +309,17 @@ export async function appRoutes(f: FastifyInstance) {
       root_dir: d.rootDir?.trim() || null,
       git_token: d.gitToken?.trim() || null,
     });
+    updateApp(app.id, { webhook_secret: newWebhookSecret() });
     registerSecret(app.git_token);
     const dep = enqueueDeploy(app.id, 'manual');
     reply.code(201).send({ app: appView(app, { status: 'deploying' }), deploymentId: dep.id });
   });
 
   f.get('/apps/:id', async (req, reply) => {
-    const app = getApp(Number((req.params as any).id));
+    let app = getApp(Number((req.params as any).id));
     if (!app) return reply.code(404).send({ error: 'not found' });
+    // apps created before webhooks existed get a secret on first view
+    if (!app.webhook_secret) app = updateApp(app.id, { webhook_secret: newWebhookSecret() })!;
     const statuses = await computeStatuses([app]);
     const active = app.active_deployment_id ? getDeployment(app.active_deployment_id) : null;
     const container = active?.container_id ? await inspectContainer(active.container_id) : null;
@@ -310,7 +329,15 @@ export async function appRoutes(f: FastifyInstance) {
       lastDeployment: deploymentSummary(latestDeploymentForApp(app.id)),
       container: container ? containerInfo(container) : null,
       envSchema: envSchemaFull(app),
+      webhook: webhookInfo(app),
     });
+  });
+
+  f.post('/apps/:id/webhook/regenerate', async (req, reply) => {
+    const app = getApp(Number((req.params as any).id));
+    if (!app) return reply.code(404).send({ error: 'not found' });
+    const updated = updateApp(app.id, { webhook_secret: newWebhookSecret() })!;
+    return { webhook: webhookInfo(updated) };
   });
 
   f.get('/apps/:id/env-schema', async (req, reply) => {

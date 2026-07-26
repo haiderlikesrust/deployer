@@ -196,6 +196,7 @@ export interface App {
   container?: ContainerInfo | null;
   /** detail endpoint only */
   envSchema?: EnvSchemaFull | null;
+  webhook?: WebhookInfo | null;
 }
 
 export interface EnvSchemaResponse {
@@ -229,12 +230,32 @@ export interface SystemInfo {
   probeMode: string;
 }
 
+export interface NotifyEvents {
+  deploySuccess: boolean;
+  deployFailed: boolean;
+  needsEnv: boolean;
+  crashLoop: boolean;
+  reachability: boolean;
+}
+
 export interface Settings {
   baseDomain: string;
   sslMode: string;
   dockerNetwork: string;
   imageRetention: number;
   letsencryptEmail: string | null;
+  notifications: {
+    telegramConfigured: boolean;
+    telegramChat: string | null;
+    discordConfigured: boolean;
+    events: NotifyEvents;
+  };
+}
+
+export interface WebhookInfo {
+  secret: string;
+  githubUrl: string;
+  genericUrl: string;
 }
 
 export interface CreateAppInput {
@@ -272,6 +293,7 @@ export const Api = {
     deploy: (id: number, opts?: { skipEnvCheck?: boolean }) =>
       req<{ deploymentId: number }>(`/apps/${id}/deploy`, { method: 'POST', body: JSON.stringify(opts ?? {}) }),
     envSchema: (id: number) => req<EnvSchemaResponse>(`/apps/${id}/env-schema`),
+    regenerateWebhook: (id: number) => req<{ webhook: WebhookInfo }>(`/apps/${id}/webhook/regenerate`, { method: 'POST' }),
     action: (id: number, action: 'start' | 'stop' | 'restart') => req<{ ok: boolean }>(`/apps/${id}/${action}`, { method: 'POST' }),
   },
 
@@ -280,6 +302,7 @@ export const Api = {
     get: (id: number) => req<Deployment>(`/deployments/${id}`),
     log: (id: number) => req<string>(`/deployments/${id}/log`),
     cancel: (id: number) => req<{ ok: boolean }>(`/deployments/${id}/cancel`, { method: 'POST' }),
+    rollback: (id: number) => req<{ deploymentId: number }>(`/deployments/${id}/rollback`, { method: 'POST' }),
   },
 
   env: {
@@ -290,8 +313,15 @@ export const Api = {
 
   settings: {
     get: () => req<Settings>('/settings'),
-    put: (patch: Partial<Pick<Settings, 'imageRetention' | 'letsencryptEmail'>>) =>
-      req<{ ok: boolean }>('/settings', { method: 'PUT', body: JSON.stringify(patch) }),
+    put: (patch: {
+      imageRetention?: number;
+      letsencryptEmail?: string | null;
+      telegramToken?: string;
+      telegramChat?: string;
+      discordWebhook?: string;
+      notifyEvents?: Partial<NotifyEvents>;
+    }) => req<{ ok: boolean }>('/settings', { method: 'PUT', body: JSON.stringify(patch) }),
+    notifyTest: () => req<{ ok: boolean; errors: string[] }>('/settings/notify-test', { method: 'POST' }),
   },
 
   system: {

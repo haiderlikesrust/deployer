@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getApp, getDeployment, listDeployments } from '../db/repo.js';
-import { cancelDeployment } from '../core/queue.js';
+import { cancelDeployment, enqueueRollback } from '../core/queue.js';
 import { readFullLog } from '../core/buildlogs.js';
 import type { DeploymentRow } from '../types.js';
 
@@ -61,5 +61,20 @@ export async function deploymentRoutes(f: FastifyInstance) {
     const ok = cancelDeployment(dep.id);
     if (!ok) return reply.code(409).send({ error: `deployment is ${dep.status} — nothing to cancel` });
     return { ok: true };
+  });
+
+  f.post('/deployments/:id/rollback', async (req, reply) => {
+    const dep = getDeployment(Number((req.params as any).id));
+    if (!dep) return reply.code(404).send({ error: 'not found' });
+    const app = getApp(dep.app_id);
+    if (!app) return reply.code(404).send({ error: 'app not found' });
+    if (!dep.image_tag || !dep.config_json) {
+      return reply.code(409).send({ error: 'this deployment has no retained image to roll back to' });
+    }
+    if (app.active_deployment_id === dep.id) {
+      return reply.code(409).send({ error: 'this deployment is already live' });
+    }
+    const rb = enqueueRollback(app.id, dep);
+    reply.code(201).send({ deploymentId: rb.id });
   });
 }

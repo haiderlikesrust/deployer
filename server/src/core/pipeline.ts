@@ -18,9 +18,10 @@ import { resolveConfig } from './configResolve.js';
 import { detectEnvSchema, missingRequiredKeys } from './detect/envexample.js';
 import { buildImage } from './builder.js';
 import { runContainer, healthGate } from './runner.js';
-import { removeContainer, stopContainer, ensureNetwork } from './docker.js';
+import { docker, removeContainer, stopContainer, ensureNetwork } from './docker.js';
 import { emitEvent } from './events.js';
 import { checkDiskSpace, retainImages } from './cleanup.js';
+import { notify } from './notify.js';
 
 class CanceledError extends Error {
   constructor() {
@@ -59,6 +60,11 @@ export async function runDeployment(deploymentId: number): Promise<void> {
   const app = getApp(dep.app_id);
   if (!app) {
     updateDeployment(dep.id, { status: 'canceled', error: 'app was deleted', finished_at: now() });
+    return;
+  }
+
+  if (dep.trigger === 'rollback') {
+    await runRollback(dep, app);
     return;
   }
 
@@ -167,6 +173,13 @@ export async function runDeployment(deploymentId: number): Promise<void> {
     updateDeployment(dep.id, { status: 'live', finished_at: now() });
     emitEvent({ type: 'deployment', appId: app.id, deploymentId: dep.id, status: 'live' });
 
+    notify(
+      'deploySuccess',
+      `✅ ${app.name} deployed (#${dep.id})` +
+        (commit.message ? ` — ${commit.message}` : '') +
+        (cfg.domainHost ? `\n${urlFor(cfg)}` : ' (worker)')
+    );
+
     // post-live housekeeping — never fails the deployment
     try {
       await retainImages(app.name, dep.id);
@@ -197,6 +210,7 @@ export async function runDeployment(deploymentId: number): Promise<void> {
         finished_at: now(),
       });
       emitEvent({ type: 'deployment', appId: app.id, deploymentId: dep.id, status: 'needs_env' });
+      notify('needsEnv', `⏸️ ${app.name} deploy #${dep.id} is waiting for ${e.missing.length} environment variable(s): ${e.missing.join(', ')}`);
     } else if (wasCanceled) {
       stageLog(dep.id, '✗ Deployment canceled');
       updateDeployment(dep.id, { status: 'canceled', failed_stage: stage, finished_at: now() });
@@ -206,11 +220,70 @@ export async function runDeployment(deploymentId: number): Promise<void> {
       for (const line of msg.split('\n')) appendLog(dep.id, `✗ ${line}`);
       updateDeployment(dep.id, { status: 'failed', failed_stage: stage, error: msg.slice(0, 4000), finished_at: now() });
       emitEvent({ type: 'deployment', appId: app.id, deploymentId: dep.id, status: 'failed' });
+      notify('deployFailed', `❌ ${app.name} deploy #${dep.id} failed at ${stage}: ${msg.split('\n')[0].slice(0, 300)}`);
     }
   } finally {
     clearCancelFlag(dep.id);
     closeLog(dep.id);
     fs.rmSync(buildDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Rollback: re-run a retained image with its snapshotted config. No clone, no
+ * build — the same failure guarantees as a deploy apply (health gate before
+ * the old container is retired).
+ */
+async function runRollback(dep: DeploymentRow, app: AppRow) {
+  updateDeployment(dep.id, { started_at: now(), log_file: `deploy-${dep.id}.log` });
+  let startedContainer: string | null = null;
+  let stage: DeploymentStatus = 'starting';
+
+  try {
+    await ensureNetwork();
+    if (!dep.image_tag || !dep.config_json) throw new Error('rollback source has no retained image or config');
+    const cfg = JSON.parse(dep.config_json) as ResolvedConfig;
+    stageLog(dep.id, `Rolling back to image ${dep.image_tag}${dep.commit_sha ? ` (${dep.commit_sha.slice(0, 10)} — ${dep.commit_msg ?? ''})` : ''}`);
+
+    const exists = await docker(['image', 'inspect', dep.image_tag]);
+    if (exists.code !== 0) {
+      throw new Error(`image ${dep.image_tag} no longer exists (pruned by retention) — redeploy that commit instead`);
+    }
+
+    setStage(dep, (stage = 'starting'));
+    stageLog(dep.id, 'Starting container');
+    startedContainer = await runContainer(app, dep.id, cfg, dep.image_tag);
+    updateDeployment(dep.id, { container_id: startedContainer });
+
+    setStage(dep, (stage = 'checking'));
+    stageLog(dep.id, 'Health check');
+    await healthGate(dep.id, cfg, startedContainer);
+
+    await promote(app, dep, cfg);
+    stageLog(dep.id, cfg.domainHost ? `✓ Rolled back — live at ${urlFor(cfg)}` : '✓ Rolled back (worker)');
+    updateDeployment(dep.id, { status: 'live', finished_at: now() });
+    emitEvent({ type: 'deployment', appId: app.id, deploymentId: dep.id, status: 'live' });
+    notify('deploySuccess', `↩️ ${app.name} rolled back to ${dep.commit_sha?.slice(0, 10) ?? dep.image_tag} (#${dep.id})`);
+  } catch (e) {
+    const wasCanceled = e instanceof CanceledError || isCanceled(dep.id);
+    if (startedContainer) {
+      await removeContainer(startedContainer).catch(() => {});
+      updateDeployment(dep.id, { container_id: null });
+    }
+    if (wasCanceled) {
+      stageLog(dep.id, '✗ Rollback canceled');
+      updateDeployment(dep.id, { status: 'canceled', failed_stage: stage, finished_at: now() });
+      emitEvent({ type: 'deployment', appId: app.id, deploymentId: dep.id, status: 'canceled' });
+    } else {
+      const msg = (e as Error).message;
+      for (const line of msg.split('\n')) appendLog(dep.id, `✗ ${line}`);
+      updateDeployment(dep.id, { status: 'failed', failed_stage: stage, error: msg.slice(0, 4000), finished_at: now() });
+      emitEvent({ type: 'deployment', appId: app.id, deploymentId: dep.id, status: 'failed' });
+      notify('deployFailed', `❌ ${app.name} rollback #${dep.id} failed: ${msg.split('\n')[0].slice(0, 300)}`);
+    }
+  } finally {
+    clearCancelFlag(dep.id);
+    closeLog(dep.id);
   }
 }
 

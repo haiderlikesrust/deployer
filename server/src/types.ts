@@ -61,7 +61,7 @@ export interface DeploymentRow {
   status: DeploymentStatus;
   failed_stage: string | null;
   error: string | null;
-  trigger: 'manual' | 'webhook';
+  trigger: 'manual' | 'webhook' | 'rollback';
   commit_sha: string | null;
   commit_msg: string | null;
   config_json: string | null;

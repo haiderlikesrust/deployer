@@ -189,6 +189,133 @@ export default function SystemPage() {
           )}
         </div>
       </Card>
+
+      <NotificationsCard />
     </div>
+  );
+}
+
+function NotificationsCard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const settings = useQuery({ queryKey: ['settings'], queryFn: Api.settings.get });
+  const n = settings.data?.notifications;
+
+  const [telegramToken, setTelegramToken] = useState('');
+  const [telegramChat, setTelegramChat] = useState<string | null>(null);
+  const [discordWebhook, setDiscordWebhook] = useState('');
+
+  const save = useMutation({
+    mutationFn: () =>
+      Api.settings.put({
+        ...(telegramToken !== '' ? { telegramToken } : {}),
+        ...(telegramChat != null ? { telegramChat } : {}),
+        ...(discordWebhook !== '' ? { discordWebhook } : {}),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      setTelegramToken('');
+      setTelegramChat(null);
+      setDiscordWebhook('');
+      toast({ title: 'Notification channels saved', variant: 'success' });
+    },
+    onError: (e) => toast({ title: 'Could not save', description: (e as Error).message, variant: 'error' }),
+  });
+
+  const toggleEvent = useMutation({
+    mutationFn: (patch: Record<string, boolean>) => Api.settings.put({ notifyEvents: patch }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+  });
+
+  const test = useMutation({
+    mutationFn: Api.settings.notifyTest,
+    onSuccess: (r) =>
+      r.ok
+        ? toast({ title: 'Test sent — check your phone', variant: 'success' })
+        : toast({ title: 'Delivery problems', description: r.errors.join('; '), variant: 'error' }),
+    onError: (e) => toast({ title: 'Test failed', description: (e as Error).message, variant: 'error' }),
+  });
+
+  const events: { key: keyof NonNullable<typeof n>['events']; label: string }[] = [
+    { key: 'deploySuccess', label: 'Deploy succeeded' },
+    { key: 'deployFailed', label: 'Deploy failed' },
+    { key: 'needsEnv', label: 'Waiting for env vars' },
+    { key: 'crashLoop', label: 'App crash / restart' },
+    { key: 'reachability', label: 'App down / recovered' },
+  ];
+
+  return (
+    <Card padding="none">
+      <CardHeader>
+        <CardTitle>Notifications</CardTitle>
+        <p className="mt-0.5 text-xs text-fg-subtle">Deploys, failures and crashes pushed to Telegram or Discord.</p>
+      </CardHeader>
+      <CardBody className="space-y-5">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-fg">
+              Telegram {n?.telegramConfigured && <span className="ml-1 text-success-fg">✓ configured</span>}
+            </div>
+            <Input
+              mono
+              type="password"
+              aria-label="Telegram bot token"
+              placeholder={n?.telegramConfigured ? 'bot token (unchanged)' : 'bot token from @BotFather'}
+              value={telegramToken}
+              onChange={(e) => setTelegramToken(e.target.value)}
+            />
+            <Input
+              mono
+              aria-label="Telegram chat id"
+              placeholder="chat id (message @userinfobot)"
+              value={telegramChat ?? n?.telegramChat ?? ''}
+              onChange={(e) => setTelegramChat(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-fg">
+              Discord {n?.discordConfigured && <span className="ml-1 text-success-fg">✓ configured</span>}
+            </div>
+            <Input
+              mono
+              type="password"
+              aria-label="Discord webhook URL"
+              placeholder={n?.discordConfigured ? 'webhook URL (unchanged)' : 'channel → Integrations → Webhooks'}
+              value={discordWebhook}
+              onChange={(e) => setDiscordWebhook(e.target.value)}
+            />
+            <p className="text-xs text-fg-faint">Paste an empty value and save to remove a channel.</p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-x-5 gap-y-2">
+          {events.map(({ key, label }) => (
+            <label key={key} className="flex cursor-pointer items-center gap-2 text-xs text-fg-muted">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-white"
+                checked={n?.events[key] ?? true}
+                onChange={(e) => toggleEvent.mutate({ [key]: e.target.checked })}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            variant="primary"
+            loading={save.isPending}
+            disabled={telegramToken === '' && telegramChat == null && discordWebhook === ''}
+            onClick={() => save.mutate()}
+          >
+            Save channels
+          </Button>
+          <Button loading={test.isPending} disabled={!n?.telegramConfigured && !n?.discordConfigured} onClick={() => test.mutate()}>
+            Send test
+          </Button>
+        </div>
+      </CardBody>
+    </Card>
   );
 }

@@ -1,4 +1,4 @@
-import { createDeployment, getDeployment, queuedDeploymentForApp, updateDeployment } from '../db/repo.js';
+import { createDeployment, createRollbackDeployment, getDeployment, queuedDeploymentForApp, updateDeployment } from '../db/repo.js';
 import { now } from '../db/db.js';
 import { IN_FLIGHT_STATUSES, type DeploymentRow } from '../types.js';
 import { requestCancel } from './children.js';
@@ -12,7 +12,7 @@ import { runDeployment } from './pipeline.js';
 const q: number[] = [];
 let activeId: number | null = null;
 
-export function enqueueDeploy(appId: number, trigger: 'manual' | 'webhook'): DeploymentRow {
+export function enqueueDeploy(appId: number, trigger: DeploymentRow['trigger']): DeploymentRow {
   // a newer request replaces one still waiting in the queue
   const waiting = queuedDeploymentForApp(appId);
   if (waiting && q.includes(waiting.id)) {
@@ -21,6 +21,21 @@ export function enqueueDeploy(appId: number, trigger: 'manual' | 'webhook'): Dep
     emitEvent({ type: 'deployment', appId, deploymentId: waiting.id, status: 'superseded' });
   }
   const dep = createDeployment(appId, trigger);
+  q.push(dep.id);
+  emitEvent({ type: 'deployment', appId, deploymentId: dep.id, status: 'queued' });
+  void pump();
+  return dep;
+}
+
+/** Queue a re-run of a previous deployment's exact image + config. */
+export function enqueueRollback(appId: number, source: DeploymentRow): DeploymentRow {
+  const waiting = queuedDeploymentForApp(appId);
+  if (waiting && q.includes(waiting.id)) {
+    q.splice(q.indexOf(waiting.id), 1);
+    updateDeployment(waiting.id, { status: 'superseded', finished_at: now() });
+    emitEvent({ type: 'deployment', appId, deploymentId: waiting.id, status: 'superseded' });
+  }
+  const dep = createRollbackDeployment(appId, source);
   q.push(dep.id);
   emitEvent({ type: 'deployment', appId, deploymentId: dep.id, status: 'queued' });
   void pump();
