@@ -115,8 +115,8 @@ function Header({ sseDown }: { sseDown: boolean }) {
   });
 
   const system = useQuery({ queryKey: ['system'], queryFn: Api.system.get, staleTime: 60000 });
-  // the scheme has to come from the server — a local or behind-nginx instance is not https
-  const docsUrl = system.data?.baseDomain ? `${system.data.publicScheme ?? 'https'}://docs.${system.data.baseDomain}` : null;
+  // the server only returns this once a deployed app actually serves the docs host
+  const docsUrl = system.data?.docsUrl ?? null;
 
   async function signOut() {
     await Api.logout();

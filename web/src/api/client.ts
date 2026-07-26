@@ -225,6 +225,7 @@ export interface SystemInfo {
   baseDomain: string;
   sslMode: string;
   publicScheme?: string;
+  docsUrl?: string | null;
   probeMode: string;
 }
 
