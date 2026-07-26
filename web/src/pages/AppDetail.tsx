@@ -39,6 +39,8 @@ import {
   SectionLabel,
   Select,
   Skeleton,
+  Sparkline,
+  formatBytes,
   SourceChip,
   StatusBadge,
   StatusDot,
@@ -280,6 +282,17 @@ export default function AppDetail() {
           </span>
         )}
       </div>
+
+      {a.httpUp === false && status === 'live' && (
+        <Card tone="warn" padding="sm" className="mt-4">
+          <span className="flex items-center gap-2 text-xs text-warn-fg">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            The container is running but the app is not answering — check the logs.
+          </span>
+        </Card>
+      )}
+
+      {status === 'live' && <MetricsStrip app={a} />}
 
       {/* once the variables are filled in the banner has nothing left to ask for */}
       {a.lastDeployment?.status === 'needs_env' && !a.envStatus?.satisfied && (
@@ -695,13 +708,22 @@ function ConfigPanel({ config, className }: { config: ResolvedConfig; className?
 
 function RuntimeLogsTab({ app, deploy, status }: { app: App; deploy: DeployHandle; status: string }) {
   const [lines, setLines] = useState<string[]>([]);
+  const [mode, setMode] = useState<'live' | 'history'>('live');
+  const [query, setQuery] = useState('');
   const canStream = !!app.activeDeploymentId;
   const action = useMutation({ mutationFn: () => Api.apps.action(app.id, 'restart') });
 
-  useSSE(canStream ? `/api/apps/${app.id}/logs/stream` : null, {
+  useSSE(canStream && mode === 'live' ? `/api/apps/${app.id}/logs/stream` : null, {
     log: (d: { text: string }) =>
       setLines((prev) => (prev.length > 5000 ? [...prev.slice(-4000), d.text] : [...prev, d.text])),
     end: (_d, es) => es.close(),
+  });
+
+  const history = useQuery({
+    queryKey: ['logs-history', app.id, query],
+    queryFn: () => Api.apps.logsHistory(app.id, query),
+    enabled: mode === 'history',
+    placeholderData: (prev) => prev,
   });
 
   if (!canStream) {
@@ -718,10 +740,36 @@ function RuntimeLogsTab({ app, deploy, status }: { app: App; deploy: DeployHandl
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-3">
-        <span className="flex items-center gap-2 text-xs text-fg-subtle">
-          <StatusDot status="live" />
-          Following container logs · last 200 lines
-        </span>
+        <Tabs
+          ariaLabel="Log mode"
+          value={mode}
+          onChange={(v) => setMode(v as 'live' | 'history')}
+          items={[
+            { value: 'live', label: 'Live' },
+            { value: 'history', label: 'History' },
+          ]}
+        />
+        {mode === 'live' ? (
+          <span className="flex items-center gap-2 text-xs text-fg-subtle">
+            <StatusDot status="live" />
+            Following container logs · last 200 lines
+          </span>
+        ) : (
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <Input
+              aria-label="Search log history"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="search collected logs… (empty = newest first)"
+              className="max-w-72"
+            />
+            {history.data && (
+              <span className="text-xs text-fg-faint">
+                {history.data.lines.length} line(s) · {formatBytes(history.data.scannedBytes)} scanned
+              </span>
+            )}
+          </span>
+        )}
         {app.isWorker && (
           <span className="flex items-center gap-2">
             <Chip tone={app.container?.running ? 'success' : 'neutral'} size="sm">
@@ -741,13 +789,46 @@ function RuntimeLogsTab({ app, deploy, status }: { app: App; deploy: DeployHandl
         )}
       </div>
       <LogViewer
-        lines={lines}
-        live
+        lines={mode === 'live' ? lines : (history.data?.lines ?? [])}
+        live={mode === 'live'}
         filename={`${app.name}.log`}
         ariaLabel={`Runtime logs for ${app.name}`}
-        onClear={() => setLines([])}
+        onClear={mode === 'live' ? () => setLines([]) : undefined}
         className="h-[clamp(360px,calc(100vh-20rem),720px)]"
       />
+    </div>
+  );
+}
+
+/** Live CPU/memory strip for the app header — 30s docker-stats samples. */
+function MetricsStrip({ app }: { app: App }) {
+  const metrics = useQuery({
+    queryKey: ['metrics', app.id],
+    queryFn: () => Api.apps.metrics(app.id, '1h'),
+    refetchInterval: 30_000,
+  });
+  const points = metrics.data?.points ?? [];
+  if (points.length < 2) return null;
+  const cpu = points.map((p) => p.cpuPct);
+  const mem = points.map((p) => p.memBytes);
+  const lastCpu = cpu[cpu.length - 1];
+  const lastMem = mem[mem.length - 1];
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-8 gap-y-2">
+      <span className="flex items-center gap-2.5">
+        <Sparkline values={cpu} />
+        <span className="text-xs text-fg-subtle">
+          CPU <span className="tnum font-medium text-fg">{lastCpu.toFixed(1)}%</span>
+        </span>
+      </span>
+      <span className="flex items-center gap-2.5">
+        <Sparkline values={mem} stroke="var(--color-success-fg)" />
+        <span className="text-xs text-fg-subtle">
+          Mem <span className="tnum font-medium text-fg">{formatBytes(lastMem)}</span>
+          {app.memoryLimit && <span className="text-fg-faint"> / {app.memoryLimit}</span>}
+        </span>
+      </span>
+      <span className="text-2xs text-fg-faint">last hour</span>
     </div>
   );
 }

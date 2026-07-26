@@ -21,6 +21,7 @@ import { webhookRoutes } from './api/webhooks.js';
 import { serviceRoutes } from './api/services.js';
 import { startCrashWatcher } from './core/notify.js';
 import { reconcileServices, startBackupSchedule } from './core/services.js';
+import { startObservers } from './core/observe.js';
 
 async function main() {
   getDb(); // opens + migrates + creates data dirs
@@ -85,6 +86,7 @@ async function main() {
   reconcileServices((msg) => f.log.info(`services: ${msg}`)).catch((e) => f.log.error(e, 'service reconcile failed'));
   startCrashWatcher();
   startBackupSchedule();
+  startObservers();
 
   const shutdown = async () => {
     try {

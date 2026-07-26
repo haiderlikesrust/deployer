@@ -20,3 +20,4 @@ export * from './Spinner';
 export * from './ansi';
 export * from './requiredEnv';
 export * from './Identicon';
+export * from './Sparkline';

@@ -122,4 +122,22 @@ CREATE TABLE metrics (
 CREATE INDEX idx_metrics_app_ts ON metrics(app_id, ts);
 `,
   },
+  {
+    id: 6,
+    name: 'tokens_and_previews',
+    // API tokens for the CLI/CI (sha256 of the token, never the token itself),
+    // and per-branch preview deploys created from webhook pushes.
+    sql: `
+CREATE TABLE api_tokens (
+  id           INTEGER PRIMARY KEY,
+  name         TEXT NOT NULL,
+  token_hash   TEXT NOT NULL UNIQUE,
+  created_at   TEXT NOT NULL,
+  last_used_at TEXT
+);
+
+ALTER TABLE apps ADD COLUMN preview_branches INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE apps ADD COLUMN parent_app_id INTEGER;
+`,
+  },
 ];

@@ -200,6 +200,8 @@ export interface App {
   volumes?: AppVolume[];
   releaseCmd?: string | null;
   services?: LinkedService[];
+  /** null = not probed; false = container up but the app is not answering */
+  httpUp?: boolean | null;
 }
 
 export interface EnvSchemaResponse {
@@ -329,6 +331,10 @@ export const Api = {
       req<{ deploymentId: number }>(`/apps/${id}/deploy`, { method: 'POST', body: JSON.stringify(opts ?? {}) }),
     envSchema: (id: number) => req<EnvSchemaResponse>(`/apps/${id}/env-schema`),
     regenerateWebhook: (id: number) => req<{ webhook: WebhookInfo }>(`/apps/${id}/webhook/regenerate`, { method: 'POST' }),
+    metrics: (id: number, range: '1h' | '24h' = '1h') =>
+      req<{ range: number; points: { ts: number; cpuPct: number; memBytes: number }[] }>(`/apps/${id}/metrics?range=${range}`),
+    logsHistory: (id: number, q: string, limit = 300) =>
+      req<{ lines: string[]; scannedBytes: number }>(`/apps/${id}/logs/history?q=${encodeURIComponent(q)}&limit=${limit}`),
     action: (id: number, action: 'start' | 'stop' | 'restart') => req<{ ok: boolean }>(`/apps/${id}/${action}`, { method: 'POST' }),
   },
 

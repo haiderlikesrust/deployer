@@ -20,12 +20,14 @@ import type { AppRow, AppType, DeploymentRow, EnvSchema, ResolvedConfig } from '
 import { missingRequiredKeys } from '../core/detect/envexample.js';
 import { parseVolumesJson } from '../core/configResolve.js';
 import { linksForApp } from '../core/services.js';
+import { deleteAppLogs, metricsForApp, reachabilityFor, searchAppLogs } from '../core/observe.js';
 import type { ContainerState } from '../core/docker.js';
 import { cancelAllForApp, enqueueDeploy } from '../core/queue.js';
 import { sweepAppResources } from '../core/cleanup.js';
 import { deleteLogFile } from '../core/buildlogs.js';
 import { registerSecret, forgetSecret } from '../core/secrets.js';
 import {
+  execInContainer,
   inspectContainer,
   listManagedContainers,
   restartContainer,
@@ -253,6 +255,8 @@ export function appView(app: AppRow, extra: Record<string, unknown> = {}) {
     skipEnvCheck: app.skip_env_check === 1,
     releaseCmd: app.release_cmd,
     volumes: parseVolumesJson(app.volumes_json),
+    /** null = not probed (no active container); false = container up but app not answering */
+    httpUp: reachabilityFor(app.id),
     services: linksForApp(app.id).map((l) => ({ serviceId: l.service_id, name: l.service.name, type: l.service.type, envKey: l.env_key })),
     envStatus: envStatusFor(app),
     createdAt: app.created_at,
@@ -348,6 +352,33 @@ export async function appRoutes(f: FastifyInstance) {
     });
   });
 
+  /** One-off command in the running container — migrations, a quick poke, a cache clear. */
+  f.post('/apps/:id/exec', async (req, reply) => {
+    const app = getApp(Number((req.params as any).id));
+    if (!app) return reply.code(404).send({ error: 'not found' });
+    const body = z.object({ cmd: z.string().min(1).max(2000) }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'cmd required' });
+    const active = app.active_deployment_id ? getDeployment(app.active_deployment_id) : null;
+    if (!active?.container_id) return reply.code(409).send({ error: 'no running container — deploy first' });
+    const res = await execInContainer(active.container_id, body.data.cmd);
+    return { code: res.code, output: res.output.slice(0, 200_000), timedOut: res.timedOut };
+  });
+
+  f.get('/apps/:id/metrics', async (req, reply) => {
+    const app = getApp(Number((req.params as any).id));
+    if (!app) return reply.code(404).send({ error: 'not found' });
+    const range = (req.query as any)?.range === '24h' ? 24 * 3600 : 3600;
+    return { range, points: metricsForApp(app.id, range) };
+  });
+
+  f.get('/apps/:id/logs/history', async (req, reply) => {
+    const app = getApp(Number((req.params as any).id));
+    if (!app) return reply.code(404).send({ error: 'not found' });
+    const q = String((req.query as any)?.q ?? '').slice(0, 200);
+    const limit = Math.min(1000, Math.max(1, parseInt((req.query as any)?.limit ?? '300', 10) || 300));
+    return searchAppLogs(app.name, q, limit);
+  });
+
   f.post('/apps/:id/webhook/regenerate', async (req, reply) => {
     const app = getApp(Number((req.params as any).id));
     if (!app) return reply.code(404).send({ error: 'not found' });
@@ -404,6 +435,7 @@ export async function appRoutes(f: FastifyInstance) {
     const deployments = listDeployments(app.id, 1000);
     await sweepAppResources(app.name);
     for (const d of deployments) deleteLogFile(d.id);
+    deleteAppLogs(app.name);
     forgetSecret(app.git_token);
     deleteApp(app.id);
     emitEvent({ type: 'app', appId: app.id, status: 'deleted' });
